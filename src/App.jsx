@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react';
-import { Syringe, Plus, Search, Trash2, RotateCcw, CheckCircle2, AlertTriangle, ClipboardList, CalendarDays, PhoneCall, Clock, AlertCircle, CalendarCheck, MessageSquareText, X, User, Calendar } from 'lucide-react';
+import { useMemo, useState, useRef } from 'react';
+import { Syringe, Plus, Search, Trash2, RotateCcw, CheckCircle2, AlertTriangle, ClipboardList, CalendarDays, PhoneCall, Clock, AlertCircle, CalendarCheck, MessageSquareText, X, User, Calendar, Upload, FileText, AlertOctagon, CheckCheck, Info } from 'lucide-react';
 import './App.css';
 
 const appConfig = {
@@ -259,6 +259,10 @@ function App() {
   const [selected, setSelected] = useState(null);
   const [newNoteContent, setNewNoteContent] = useState('');
   const [newNoteOperator, setNewNoteOperator] = useState('');
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importPreview, setImportPreview] = useState(null);
+  const [importFile, setImportFile] = useState(null);
+  const fileInputRef = useRef(null);
 
   function persist(next) {
     setRecords(next);
@@ -355,6 +359,278 @@ function App() {
     } : record);
     persist(next);
     setSelected(next.find((record) => record.id === item.id));
+  }
+
+  function parseCSV(text) {
+    const lines = text.replace(/\r\n/g, '\n').split('\n').filter(line => line.trim());
+    if (lines.length === 0) return { headers: [], rows: [] };
+    const headers = parseCSVLine(lines[0]);
+    const rows = lines.slice(1).map(line => parseCSVLine(line));
+    return { headers, rows };
+  }
+
+  function parseCSVLine(line) {
+    const result = [];
+    let current = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const char = line[i];
+      if (char === '"') {
+        if (inQuotes && line[i + 1] === '"') {
+          current += '"';
+          i++;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (char === ',' && !inQuotes) {
+        result.push(current.trim());
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+    result.push(current.trim());
+    return result;
+  }
+
+  function detectFieldMapping(headers) {
+    const fieldMap = {};
+    const headerLower = headers.map(h => h.toLowerCase().trim());
+    const fieldRules = {
+      vaccine: ['疫苗类型', '疫苗', 'vaccine', 'vaccination'],
+      pet: ['宠物姓名', '宠物名', 'pet', 'name', '姓名'],
+      species: ['物种', '种类', 'species', 'type'],
+      ownerPhone: ['主人联系方式', '联系电话', '电话', '手机', 'ownerphone', 'phone', 'telephone', 'contact'],
+      lastDate: ['上次接种日期', '上次接种', '最后接种', 'lastdate', 'last_date', 'last'],
+      nextDate: ['下次提醒日期', '下次接种', '提醒日期', 'nextdate', 'next_date', 'next', 'due']
+    };
+    headerLower.forEach((header, index) => {
+      for (const [field, keywords] of Object.entries(fieldRules)) {
+        if (keywords.some(kw => header.includes(kw.toLowerCase()))) {
+          fieldMap[field] = index;
+          break;
+        }
+      }
+    });
+    return fieldMap;
+  }
+
+  function isValidDate(dateStr) {
+    if (!dateStr) return false;
+    const formats = [
+      /^\d{4}-\d{1,2}-\d{1,2}$/,
+      /^\d{4}\/\d{1,2}\/\d{1,2}$/,
+      /^\d{4}年\d{1,2}月\d{1,2}日$/,
+      /^\d{1,2}-\d{1,2}-\d{4}$/,
+      /^\d{1,2}\/\d{1,2}\/\d{4}$/
+    ];
+    if (!formats.some(f => f.test(dateStr.trim()))) return false;
+    const normalized = dateStr.trim().replace(/[年月]/g, '-').replace(/日/g, '').replace(/\//g, '-');
+    const parts = normalized.split('-');
+    let year, month, day;
+    if (parts[0].length === 4) {
+      [year, month, day] = parts;
+    } else {
+      [month, day, year] = parts;
+    }
+    const date = new Date(`${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`);
+    return date instanceof Date && !isNaN(date) && date.getFullYear() > 2000 && date.getFullYear() < 2100;
+  }
+
+  function normalizeDate(dateStr) {
+    if (!dateStr) return '';
+    const normalized = dateStr.trim().replace(/[年月]/g, '-').replace(/日/g, '').replace(/\//g, '-');
+    const parts = normalized.split('-');
+    let year, month, day;
+    if (parts[0].length === 4) {
+      [year, month, day] = parts;
+    } else {
+      [month, day, year] = parts;
+    }
+    return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+  }
+
+  function isValidPhone(phone) {
+    if (!phone) return false;
+    const clean = String(phone).replace(/\s|-/g, '');
+    return /^1[3-9]\d{9}$/.test(clean) || /^\d{7,8}$/.test(clean);
+  }
+
+  function normalizePhone(phone) {
+    if (!phone) return '';
+    return String(phone).replace(/\s|-/g, '');
+  }
+
+  function validateRow(row, fieldMapping, headers, rowIndex, missingRequiredFields) {
+    const errors = [];
+    const warnings = [];
+    const data = {};
+    if (missingRequiredFields.length > 0) {
+      return { valid: false, errors: [], warnings, data: null, skipped: true };
+    }
+    for (const [field, colIndex] of Object.entries(fieldMapping)) {
+      const rawValue = row[colIndex] || '';
+      data[field] = rawValue;
+    }
+    if (fieldMapping.pet !== undefined) {
+      if (!data.pet || !data.pet.trim()) {
+        errors.push('宠物姓名不能为空');
+      }
+    }
+    if (fieldMapping.ownerPhone !== undefined) {
+      if (!data.ownerPhone || !data.ownerPhone.trim()) {
+        errors.push('主人联系方式不能为空');
+      } else if (!isValidPhone(data.ownerPhone)) {
+        errors.push(`联系方式格式不正确：${data.ownerPhone}`);
+      }
+    }
+    if (fieldMapping.vaccine !== undefined) {
+      if (!data.vaccine || !data.vaccine.trim()) {
+        errors.push('疫苗类型不能为空');
+      } else if (!appConfig.fields.find(f => f.key === 'vaccine').options.includes(data.vaccine.trim())) {
+        warnings.push(`疫苗类型"${data.vaccine}"不在预设选项中，将保留原值`);
+      }
+    }
+    if (fieldMapping.species !== undefined && data.species && !appConfig.fields.find(f => f.key === 'species').options.includes(data.species.trim())) {
+      warnings.push(`物种"${data.species}"不在预设选项中，将保留原值`);
+    }
+    if (fieldMapping.lastDate !== undefined && data.lastDate && !isValidDate(data.lastDate)) {
+      errors.push(`上次接种日期格式不正确：${data.lastDate}（请使用YYYY-MM-DD格式）`);
+    }
+    if (fieldMapping.nextDate !== undefined) {
+      if (!data.nextDate || !data.nextDate.trim()) {
+        errors.push('下次提醒日期不能为空');
+      } else if (!isValidDate(data.nextDate)) {
+        errors.push(`下次提醒日期格式不正确：${data.nextDate}（请使用YYYY-MM-DD格式）`);
+      }
+    }
+    return {
+      valid: errors.length === 0,
+      errors,
+      warnings,
+      data: {
+        pet: data.pet?.trim() || '',
+        species: data.species?.trim() || appConfig.defaultValues.species,
+        ownerPhone: normalizePhone(data.ownerPhone),
+        vaccine: data.vaccine?.trim() || '',
+        lastDate: data.lastDate ? normalizeDate(data.lastDate) : '',
+        nextDate: data.nextDate ? normalizeDate(data.nextDate) : ''
+      }
+    };
+  }
+
+  function findDuplicates(validRows, existingRecords) {
+    const phoneCounts = {};
+    const existingPhones = new Set(existingRecords.map(r => normalizePhone(r.ownerPhone)));
+    validRows.forEach(row => {
+      const phone = row.data.ownerPhone;
+      phoneCounts[phone] = (phoneCounts[phone] || 0) + 1;
+    });
+    const fileDuplicates = Object.entries(phoneCounts)
+      .filter(([, count]) => count > 1)
+      .map(([phone]) => phone);
+    const existingDuplicates = validRows
+      .filter(row => existingPhones.has(row.data.ownerPhone))
+      .map(row => row.data.ownerPhone);
+    return { fileDuplicates, existingDuplicates: [...new Set(existingDuplicates)] };
+  }
+
+  function processCSVFile(file) {
+    setImportFile(file);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const text = e.target.result;
+        const { headers, rows } = parseCSV(text);
+        const fieldMapping = detectFieldMapping(headers);
+        const requiredFields = ['pet', 'ownerPhone', 'vaccine', 'nextDate'];
+        const missingRequiredFields = requiredFields.filter(field => fieldMapping[field] === undefined);
+        const missingRequiredFieldLabels = missingRequiredFields.map(
+          field => appConfig.fields.find(f => f.key === field)?.label || field
+        );
+        const validatedRows = rows.map((row, index) => ({
+          rowIndex: index + 2,
+          ...validateRow(row, fieldMapping, headers, index + 2, missingRequiredFields),
+          rawRow: row
+        }));
+        const validRows = validatedRows.filter(r => r.valid);
+        const errorRows = validatedRows.filter(r => !r.valid && !r.skipped);
+        const { fileDuplicates, existingDuplicates } = findDuplicates(validRows, records);
+        const detectedFields = appConfig.fields.map(field => ({
+          ...field,
+          detected: fieldMapping[field.key] !== undefined,
+          sourceColumn: fieldMapping[field.key] !== undefined ? headers[fieldMapping[field.key]] : null,
+          required: requiredFields.includes(field.key)
+        }));
+        setImportPreview({
+          fileName: file.name,
+          totalRows: rows.length,
+          headers,
+          fieldMapping,
+          detectedFields,
+          validRows,
+          errorRows,
+          fileDuplicates,
+          existingDuplicates,
+          missingRequiredFields: missingRequiredFieldLabels,
+          allWarnings: validRows.flatMap(r => r.warnings.map(w => `第${r.rowIndex}行：${w}`))
+        });
+      } catch (error) {
+        alert('CSV文件解析失败，请检查文件格式');
+        console.error(error);
+      }
+    };
+    reader.readAsText(file, 'UTF-8');
+  }
+
+  function handleFileUpload(e) {
+    const file = e.target.files?.[0];
+    if (file) {
+      processCSVFile(file);
+    }
+  }
+
+  function handleDrop(e) {
+    e.preventDefault();
+    const file = e.dataTransfer.files?.[0];
+    if (file && (file.name.endsWith('.csv') || file.type === 'text/csv')) {
+      processCSVFile(file);
+    } else {
+      alert('请上传CSV格式的文件');
+    }
+  }
+
+  function handleDragOver(e) {
+    e.preventDefault();
+  }
+
+  function confirmImport() {
+    if (!importPreview) return;
+    const newRecords = importPreview.validRows.map(row => ({
+      id: uid(),
+      ...row.data,
+      status: appConfig.primaryStatus,
+      createdAt: new Date().toISOString(),
+      timeline: [{ status: appConfig.primaryStatus, at: today, by: '批量导入' }],
+      notes: []
+    }));
+    persist([...newRecords, ...records]);
+    setShowImportModal(false);
+    setImportPreview(null);
+    setImportFile(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+    alert(`成功导入 ${newRecords.length} 条记录`);
+  }
+
+  function cancelImport() {
+    setShowImportModal(false);
+    setImportPreview(null);
+    setImportFile(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
   }
 
   const filteredRecords = useMemo(() => {
@@ -594,6 +870,7 @@ function App() {
             </label>
           </div>
           <button className="primary" type="submit"><Plus size={18} />新增</button>
+          <button type="button" className="import-btn" onClick={() => setShowImportModal(true)}><Upload size={18} />批量导入CSV</button>
           <p className="hint">{appConfig.note}</p>
         </form>
 
@@ -766,6 +1043,215 @@ function App() {
           )}
         </aside>
       </section>
+
+      {showImportModal && (
+        <div className="modal-overlay" onClick={cancelImport}>
+          <div className="modal-content import-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div className="modal-title">
+                <FileText size={20} />
+                <h2>批量导入宠物疫苗提醒记录</h2>
+              </div>
+              <button type="button" className="modal-close" onClick={cancelImport}>
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="modal-body">
+              {!importPreview ? (
+                <div
+                  className="upload-area"
+                  onDrop={handleDrop}
+                  onDragOver={handleDragOver}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <Upload size={48} className="upload-icon" />
+                  <h3>点击或拖拽CSV文件到此处上传</h3>
+                  <p>支持 .csv 格式文件</p>
+                  <div className="csv-format-hint">
+                    <p className="hint-title"><Info size={14} />CSV文件格式要求：</p>
+                    <ul>
+                      <li>必须包含列：宠物姓名、主人联系方式、疫苗类型、下次提醒日期</li>
+                      <li>可选列：物种、上次接种日期</li>
+                      <li>日期格式支持：YYYY-MM-DD、YYYY/MM/DD、YYYY年MM月DD日</li>
+                      <li>手机号支持：11位手机号或7-8位固定电话</li>
+                    </ul>
+                  </div>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".csv,text/csv"
+                    onChange={handleFileUpload}
+                    className="hidden-file-input"
+                  />
+                </div>
+              ) : (
+                <div className="import-preview">
+                  <div className="preview-summary">
+                    <div className="summary-item">
+                      <span className="summary-label">文件名</span>
+                      <span className="summary-value">{importPreview.fileName}</span>
+                    </div>
+                    <div className="summary-item">
+                      <span className="summary-label">总行数</span>
+                      <span className="summary-value">{importPreview.totalRows}</span>
+                    </div>
+                    <div className="summary-item success">
+                      <span className="summary-label"><CheckCheck size={16} />可导入行数</span>
+                      <span className="summary-value">{importPreview.validRows.length}</span>
+                    </div>
+                    <div className="summary-item error">
+                      <span className="summary-label"><AlertOctagon size={16} />错误行数</span>
+                      <span className="summary-value">{importPreview.errorRows.length}</span>
+                    </div>
+                  </div>
+
+                  {importPreview.missingRequiredFields && importPreview.missingRequiredFields.length > 0 && (
+                    <div className="preview-section fatal-section">
+                      <h3><AlertOctagon size={16} className="fatal-icon" />字段缺失</h3>
+                      <p className="fatal-text">CSV文件缺少以下必填字段列，无法进行导入：</p>
+                      <div className="missing-fields-list">
+                        {importPreview.missingRequiredFields.map((field) => (
+                          <span key={field} className="missing-field-item">{field}</span>
+                        ))}
+                      </div>
+                      <p className="fatal-hint">请补充以上列后重新上传文件。</p>
+                    </div>
+                  )}
+
+                  <div className="preview-section">
+                    <h3><FileText size={16} />字段识别结果</h3>
+                    <div className="field-mapping-grid">
+                      {importPreview.detectedFields.map((field) => (
+                        <div key={field.key} className={`field-mapping-item ${field.detected ? 'detected' : 'missing'}`}>
+                          <span className="field-label">
+                            {field.label}
+                            {field.required && <span className="required-mark">*</span>}
+                          </span>
+                          <span className="field-status">
+                            {field.detected ? (
+                              <span className="detected-badge"><CheckCircle2 size={14} /> {field.sourceColumn}</span>
+                            ) : (
+                              <span className="missing-badge"><AlertTriangle size={14} /> 未识别</span>
+                            )}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="field-hint"><span className="required-mark">*</span> 标记为必填字段</p>
+                  </div>
+
+                  {importPreview.fileDuplicates.length > 0 && (
+                    <div className="preview-section warning-section">
+                      <h3><AlertTriangle size={16} className="warning-icon" />导入文件内重复联系方式</h3>
+                      <p>以下号码在导入文件中出现多次，可能导致重复记录：</p>
+                      <div className="duplicate-list">
+                        {importPreview.fileDuplicates.map((phone) => (
+                          <span key={phone} className="duplicate-item">{phone}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {importPreview.existingDuplicates.length > 0 && (
+                    <div className="preview-section warning-section">
+                      <h3><AlertTriangle size={16} className="warning-icon" />与现有记录重复的联系方式</h3>
+                      <p>以下号码在系统中已存在，导入后将新增重复记录：</p>
+                      <div className="duplicate-list">
+                        {importPreview.existingDuplicates.map((phone) => (
+                          <span key={phone} className="duplicate-item">{phone}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {importPreview.allWarnings.length > 0 && (
+                    <div className="preview-section warning-section">
+                      <h3><AlertTriangle size={16} className="warning-icon" />警告信息</h3>
+                      <ul className="warning-list">
+                        {importPreview.allWarnings.slice(0, 10).map((warning, index) => (
+                          <li key={index}>{warning}</li>
+                        ))}
+                        {importPreview.allWarnings.length > 10 && (
+                          <li>... 还有 {importPreview.allWarnings.length - 10} 条警告</li>
+                        )}
+                      </ul>
+                    </div>
+                  )}
+
+                  {importPreview.errorRows.length > 0 && (
+                    <div className="preview-section error-section">
+                      <h3><AlertOctagon size={16} className="error-icon" />错误行摘要</h3>
+                      <div className="error-list">
+                        {importPreview.errorRows.slice(0, 10).map((row) => (
+                          <div key={row.rowIndex} className="error-item">
+                            <span className="error-row">第 {row.rowIndex} 行</span>
+                            <ul>
+                              {row.errors.map((error, idx) => (
+                                <li key={idx}>{error}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        ))}
+                        {importPreview.errorRows.length > 10 && (
+                          <p className="more-errors">... 还有 {importPreview.errorRows.length - 10} 行错误，请修正后重新上传</p>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {importPreview.validRows.length > 0 && (
+                    <div className="preview-section">
+                      <h3><CheckCircle2 size={16} className="success-icon" />数据预览（前5条）</h3>
+                      <div className="preview-table-container">
+                        <table className="preview-table">
+                          <thead>
+                            <tr>
+                              <th>宠物姓名</th>
+                              <th>物种</th>
+                              <th>联系方式</th>
+                              <th>疫苗类型</th>
+                              <th>上次接种</th>
+                              <th>下次提醒</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {importPreview.validRows.slice(0, 5).map((row) => (
+                              <tr key={row.rowIndex}>
+                                <td>{row.data.pet}</td>
+                                <td>{row.data.species}</td>
+                                <td>{row.data.ownerPhone}</td>
+                                <td>{row.data.vaccine}</td>
+                                <td>{row.data.lastDate || '-'}</td>
+                                <td>{row.data.nextDate}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {importPreview && (
+              <div className="modal-footer">
+                <button type="button" className="btn-secondary" onClick={cancelImport}>取消</button>
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={confirmImport}
+                  disabled={importPreview.validRows.length === 0 || (importPreview.missingRequiredFields && importPreview.missingRequiredFields.length > 0)}
+                >
+                  <CheckCircle2 size={16} />
+                  确认导入 {importPreview.validRows.length} 条记录
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </main>
   );
 }
