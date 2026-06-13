@@ -1,5 +1,5 @@
 import { useMemo, useState, useRef } from 'react';
-import { Syringe, Plus, Search, Trash2, RotateCcw, CheckCircle2, AlertTriangle, ClipboardList, CalendarDays, PhoneCall, Clock, AlertCircle, CalendarCheck, MessageSquareText, X, User, Calendar, Upload, FileText, AlertOctagon, CheckCheck, Info } from 'lucide-react';
+import { Syringe, Plus, Search, Trash2, RotateCcw, CheckCircle2, AlertTriangle, ClipboardList, CalendarDays, PhoneCall, Clock, AlertCircle, CalendarCheck, MessageSquareText, X, User, Calendar, Upload, FileText, AlertOctagon, CheckCheck, Info, Users, PawPrint, ArrowLeft, ChevronRight } from 'lucide-react';
 import './App.css';
 
 const appConfig = {
@@ -263,6 +263,9 @@ function App() {
   const [importPreview, setImportPreview] = useState(null);
   const [importFile, setImportFile] = useState(null);
   const fileInputRef = useRef(null);
+  const [currentView, setCurrentView] = useState('records');
+  const [ownerSearch, setOwnerSearch] = useState('');
+  const [selectedOwner, setSelectedOwner] = useState(null);
 
   function persist(next) {
     setRecords(next);
@@ -690,6 +693,58 @@ function App() {
     }, {});
   }, [records]);
 
+  const ownerProfiles = useMemo(() => {
+    const groups = {};
+    records.forEach((record) => {
+      const phone = record.ownerPhone || '未知';
+      if (!groups[phone]) {
+        groups[phone] = {
+          ownerPhone: phone,
+          pets: [],
+          lastContactTime: null,
+          pendingCount: 0,
+          totalCount: 0
+        };
+      }
+      groups[phone].pets.push(record);
+      groups[phone].totalCount++;
+      if (record.status === '待联系') {
+        groups[phone].pendingCount++;
+      }
+      const timelineDates = (record.timeline || []).map((t) => new Date(t.at).getTime());
+      const noteDates = (record.notes || []).map((n) => new Date(n.createdAt).getTime());
+      const allDates = [...timelineDates, ...noteDates];
+      if (allDates.length > 0) {
+        const latest = Math.max(...allDates);
+        if (!groups[phone].lastContactTime || latest > groups[phone].lastContactTime) {
+          groups[phone].lastContactTime = latest;
+        }
+      }
+    });
+    return Object.values(groups).sort((a, b) => {
+      if (b.pendingCount !== a.pendingCount) return b.pendingCount - a.pendingCount;
+      if (b.lastContactTime && a.lastContactTime) return b.lastContactTime - a.lastContactTime;
+      return b.totalCount - a.totalCount;
+    });
+  }, [records]);
+
+  const filteredOwnerProfiles = useMemo(() => {
+    if (!ownerSearch.trim()) return ownerProfiles;
+    const query = ownerSearch.trim().toLowerCase();
+    return ownerProfiles.filter((profile) => {
+      if (profile.ownerPhone.toLowerCase().includes(query)) return true;
+      return profile.pets.some((pet) => pet.pet.toLowerCase().includes(query));
+    });
+  }, [ownerProfiles, ownerSearch]);
+
+  function jumpToRecord(recordId) {
+    const record = records.find((r) => r.id === recordId);
+    if (record) {
+      setSelected(record);
+      setCurrentView('records');
+    }
+  }
+
   return (
     <main className="shell" style={{ '--accent': appConfig.accent }}>
       <section className="hero">
@@ -704,351 +759,584 @@ function App() {
         </div>
       </section>
 
+      <div className="view-tabs">
+        <button
+          className={`view-tab ${currentView === 'records' ? 'active' : ''}`}
+          onClick={() => { setCurrentView('records'); setSelectedOwner(null); }}
+        >
+          <ClipboardList size={16} />
+          记录管理
+        </button>
+        <button
+          className={`view-tab ${currentView === 'owners' ? 'active' : ''}`}
+          onClick={() => { setCurrentView('owners'); setSelected(null); }}
+        >
+          <Users size={16} />
+          主人档案
+        </button>
+      </div>
+
       <section className="metrics">
-        {metrics.map((metric) => (
+        {currentView === 'records' ? metrics.map((metric) => (
           <article className="metric" key={metric.label}>
             <span>{metric.label}</span>
             <strong>{metric.value}</strong>
           </article>
-        ))}
+        )) : (
+          <>
+            <article className="metric">
+              <span>主人数量</span>
+              <strong>{ownerProfiles.length}</strong>
+            </article>
+            <article className="metric">
+              <span>宠物总数</span>
+              <strong>{records.length}</strong>
+            </article>
+            <article className="metric">
+              <span>待联系主人</span>
+              <strong>{ownerProfiles.filter((p) => p.pendingCount > 0).length}</strong>
+            </article>
+          </>
+        )}
       </section>
 
-      <section className="panel contact-list-panel">
-        <div className="panel-title">
-          <PhoneCall size={18} />
-          <h2>今日联系清单</h2>
-        </div>
-        <div className="contact-groups">
-          <div className="contact-group overdue-group">
-            <div className="contact-group-header">
-              <div className="contact-group-title">
-                <AlertCircle size={16} className="contact-group-icon overdue-icon" />
-                <h3>已逾期</h3>
-                <span className="contact-count">{contactListGroups.overdue.length}</span>
-              </div>
-            </div>
-            <div className="contact-records">
-              {contactListGroups.overdue.length === 0 ? (
-                <p className="empty-group">暂无逾期记录</p>
-              ) : (
-                contactListGroups.overdue.map((item) => (
-                  <article className={'contact-record ' + (item.status === '已联系' ? 'contact-record-done' : '')} key={item.id}>
-                    <div className="contact-record-main">
-                      <div className="contact-record-info">
-                        <h4>{item.pet}</h4>
-                        <p className="contact-meta">{item.ownerPhone}</p>
-                        <p className="contact-vaccine">{item.vaccine}</p>
-                      </div>
-                      <div className="contact-record-side">
-                        <span className={'status ' + statusClass(item.status)}>{item.status}</span>
-                        <span className="days-badge overdue-badge">逾期{Math.abs(daysDiff(item.nextDate))}天</span>
-                      </div>
-                    </div>
-                    <div className="contact-actions">
-                      {item.status === '已联系' ? (
-                        <button className="mark-contact-btn revert-btn" type="button" onClick={() => updateStatus(item.id, '待联系')}>
-                          <RotateCcw size={14} />重新标记为待联系
-                        </button>
-                      ) : (
-                        <button className="mark-contact-btn" type="button" onClick={() => updateStatus(item.id, '已联系')}>
-                          <CheckCircle2 size={14} />标记已联系
-                        </button>
-                      )}
-                    </div>
-                  </article>
-                ))
-              )}
-            </div>
-          </div>
-
-          <div className="contact-group today-group">
-            <div className="contact-group-header">
-              <div className="contact-group-title">
-                <Clock size={16} className="contact-group-icon today-icon" />
-                <h3>今日提醒</h3>
-                <span className="contact-count">{contactListGroups.today.length}</span>
-              </div>
-            </div>
-            <div className="contact-records">
-              {contactListGroups.today.length === 0 ? (
-                <p className="empty-group">今日暂无提醒</p>
-              ) : (
-                contactListGroups.today.map((item) => (
-                  <article className={'contact-record ' + (item.status === '已联系' ? 'contact-record-done' : '')} key={item.id}>
-                    <div className="contact-record-main">
-                      <div className="contact-record-info">
-                        <h4>{item.pet}</h4>
-                        <p className="contact-meta">{item.ownerPhone}</p>
-                        <p className="contact-vaccine">{item.vaccine}</p>
-                      </div>
-                      <div className="contact-record-side">
-                        <span className={'status ' + statusClass(item.status)}>{item.status}</span>
-                        <span className="days-badge today-badge">今天</span>
-                      </div>
-                    </div>
-                    <div className="contact-actions">
-                      {item.status === '已联系' ? (
-                        <button className="mark-contact-btn revert-btn" type="button" onClick={() => updateStatus(item.id, '待联系')}>
-                          <RotateCcw size={14} />重新标记为待联系
-                        </button>
-                      ) : (
-                        <button className="mark-contact-btn" type="button" onClick={() => updateStatus(item.id, '已联系')}>
-                          <CheckCircle2 size={14} />标记已联系
-                        </button>
-                      )}
-                    </div>
-                  </article>
-                ))
-              )}
-            </div>
-          </div>
-
-          <div className="contact-group upcoming-group">
-            <div className="contact-group-header">
-              <div className="contact-group-title">
-                <CalendarCheck size={16} className="contact-group-icon upcoming-icon" />
-                <h3>未来7天内</h3>
-                <span className="contact-count">{contactListGroups.upcoming.length}</span>
-              </div>
-            </div>
-            <div className="contact-records">
-              {contactListGroups.upcoming.length === 0 ? (
-                <p className="empty-group">暂无近期提醒</p>
-              ) : (
-                contactListGroups.upcoming.map((item) => (
-                  <article className={'contact-record ' + (item.status === '已联系' ? 'contact-record-done' : '')} key={item.id}>
-                    <div className="contact-record-main">
-                      <div className="contact-record-info">
-                        <h4>{item.pet}</h4>
-                        <p className="contact-meta">{item.ownerPhone}</p>
-                        <p className="contact-vaccine">{item.vaccine}</p>
-                      </div>
-                      <div className="contact-record-side">
-                        <span className={'status ' + statusClass(item.status)}>{item.status}</span>
-                        <span className="days-badge upcoming-badge">还有{daysDiff(item.nextDate)}天</span>
-                      </div>
-                    </div>
-                    <div className="contact-actions">
-                      {item.status === '已联系' ? (
-                        <button className="mark-contact-btn revert-btn" type="button" onClick={() => updateStatus(item.id, '待联系')}>
-                          <RotateCcw size={14} />重新标记为待联系
-                        </button>
-                      ) : (
-                        <button className="mark-contact-btn" type="button" onClick={() => updateStatus(item.id, '已联系')}>
-                          <CheckCircle2 size={14} />标记已联系
-                        </button>
-                      )}
-                    </div>
-                  </article>
-                ))
-              )}
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section className="workspace">
-        <form className="panel form-panel" onSubmit={addRecord}>
+      {currentView === 'records' && (
+        <section className="panel contact-list-panel">
           <div className="panel-title">
-            <ClipboardList size={18} />
-            <h2>新增记录</h2>
+            <PhoneCall size={18} />
+            <h2>今日联系清单</h2>
           </div>
-          <div className="form-grid">
-            {appConfig.fields.map((field) => (
-              <label key={field.key} className={field.type === 'textarea' ? 'wide' : ''}>
-                <span>{field.label}</span>
-                {field.type === 'textarea' ? (
-                  <textarea value={form[field.key] || ''} onChange={(event) => setForm({ ...form, [field.key]: event.target.value })} placeholder={field.placeholder} />
-                ) : field.type === 'select' ? (
-                  <select value={form[field.key] || ''} onChange={(event) => setForm({ ...form, [field.key]: event.target.value })}>
-                    {field.options.map((option) => <option key={option}>{option}</option>)}
-                  </select>
+          <div className="contact-groups">
+            <div className="contact-group overdue-group">
+              <div className="contact-group-header">
+                <div className="contact-group-title">
+                  <AlertCircle size={16} className="contact-group-icon overdue-icon" />
+                  <h3>已逾期</h3>
+                  <span className="contact-count">{contactListGroups.overdue.length}</span>
+                </div>
+              </div>
+              <div className="contact-records">
+                {contactListGroups.overdue.length === 0 ? (
+                  <p className="empty-group">暂无逾期记录</p>
                 ) : (
-                  <input type={field.type} value={form[field.key] || ''} onChange={(event) => setForm({ ...form, [field.key]: event.target.value })} placeholder={field.placeholder} />
+                  contactListGroups.overdue.map((item) => (
+                    <article className={'contact-record ' + (item.status === '已联系' ? 'contact-record-done' : '')} key={item.id}>
+                      <div className="contact-record-main">
+                        <div className="contact-record-info">
+                          <h4>{item.pet}</h4>
+                          <p className="contact-meta">{item.ownerPhone}</p>
+                          <p className="contact-vaccine">{item.vaccine}</p>
+                        </div>
+                        <div className="contact-record-side">
+                          <span className={'status ' + statusClass(item.status)}>{item.status}</span>
+                          <span className="days-badge overdue-badge">逾期{Math.abs(daysDiff(item.nextDate))}天</span>
+                        </div>
+                      </div>
+                      <div className="contact-actions">
+                        {item.status === '已联系' ? (
+                          <button className="mark-contact-btn revert-btn" type="button" onClick={() => updateStatus(item.id, '待联系')}>
+                            <RotateCcw size={14} />重新标记为待联系
+                          </button>
+                        ) : (
+                          <button className="mark-contact-btn" type="button" onClick={() => updateStatus(item.id, '已联系')}>
+                            <CheckCircle2 size={14} />标记已联系
+                          </button>
+                        )}
+                      </div>
+                    </article>
+                  ))
                 )}
-              </label>
-            ))}
-            <label>
-              <span>当前状态</span>
-              <select value={form.status || appConfig.primaryStatus} onChange={(event) => setForm({ ...form, status: event.target.value })}>
-                {appConfig.statuses.map((status) => <option key={status}>{status}</option>)}
-              </select>
-            </label>
-          </div>
-          <button className="primary" type="submit"><Plus size={18} />新增</button>
-          <button type="button" className="import-btn" onClick={() => setShowImportModal(true)}><Upload size={18} />批量导入CSV</button>
-          <p className="hint">{appConfig.note}</p>
-        </form>
-
-        <section className="panel list-panel">
-          <div className="toolbar">
-            <div className="search">
-              <Search size={16} />
-              <input value={filters.query} onChange={(event) => setFilters({ ...filters, query: event.target.value })} placeholder={appConfig.filters[0]?.label || '搜索'} />
+              </div>
             </div>
-            <select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}>
-              <option>全部</option>
-              {appConfig.statuses.map((status) => <option key={status}>{status}</option>)}
-            </select>
-          </div>
 
-          <div className="records">
-            {filteredRecords.map((item) => (
-              <article className={'record ' + (item.conflict || hasOverlap(item, records) ? 'conflict' : '')} key={item.id} onClick={() => setSelected(item)}>
-                <div className="record-head">
-                  <div>
-                    <h3>{item.pet}</h3>
-                    <p>{`${item.species} · ${item.vaccine} · ${item.ownerPhone}`}</p>
-                  </div>
-                  <span className={'status ' + statusClass(item.status)}>{item.status}</span>
+            <div className="contact-group today-group">
+              <div className="contact-group-header">
+                <div className="contact-group-title">
+                  <Clock size={16} className="contact-group-icon today-icon" />
+                  <h3>今日提醒</h3>
+                  <span className="contact-count">{contactListGroups.today.length}</span>
                 </div>
-                <p className="record-detail">{`下次提醒：${item.nextDate}`}</p>
-                {(item.conflict || hasOverlap(item, records)) && <div className="warning"><AlertTriangle size={15} />发现冲突</div>}
-                <div className="actions" onClick={(event) => event.stopPropagation()}>
-                  {appConfig.statuses.map((status) => (
-                    <button key={status} type="button" onClick={() => updateStatus(item.id, status)}>{status}</button>
-                  ))}
-                  {appConfig.action === 'copyRecipe' && <button type="button" onClick={() => duplicateRecord(item)}><RotateCcw size={14} />复制</button>}
-                  {appConfig.chart && <button type="button" onClick={() => addTemperature(item)}>加温度</button>}
-                  <button className="ghost-danger" type="button" onClick={() => removeRecord(item.id)}><Trash2 size={14} /></button>
+              </div>
+              <div className="contact-records">
+                {contactListGroups.today.length === 0 ? (
+                  <p className="empty-group">今日暂无提醒</p>
+                ) : (
+                  contactListGroups.today.map((item) => (
+                    <article className={'contact-record ' + (item.status === '已联系' ? 'contact-record-done' : '')} key={item.id}>
+                      <div className="contact-record-main">
+                        <div className="contact-record-info">
+                          <h4>{item.pet}</h4>
+                          <p className="contact-meta">{item.ownerPhone}</p>
+                          <p className="contact-vaccine">{item.vaccine}</p>
+                        </div>
+                        <div className="contact-record-side">
+                          <span className={'status ' + statusClass(item.status)}>{item.status}</span>
+                          <span className="days-badge today-badge">今天</span>
+                        </div>
+                      </div>
+                      <div className="contact-actions">
+                        {item.status === '已联系' ? (
+                          <button className="mark-contact-btn revert-btn" type="button" onClick={() => updateStatus(item.id, '待联系')}>
+                            <RotateCcw size={14} />重新标记为待联系
+                          </button>
+                        ) : (
+                          <button className="mark-contact-btn" type="button" onClick={() => updateStatus(item.id, '已联系')}>
+                            <CheckCircle2 size={14} />标记已联系
+                          </button>
+                        )}
+                      </div>
+                    </article>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="contact-group upcoming-group">
+              <div className="contact-group-header">
+                <div className="contact-group-title">
+                  <CalendarCheck size={16} className="contact-group-icon upcoming-icon" />
+                  <h3>未来7天内</h3>
+                  <span className="contact-count">{contactListGroups.upcoming.length}</span>
                 </div>
-              </article>
-            ))}
+              </div>
+              <div className="contact-records">
+                {contactListGroups.upcoming.length === 0 ? (
+                  <p className="empty-group">暂无近期提醒</p>
+                ) : (
+                  contactListGroups.upcoming.map((item) => (
+                    <article className={'contact-record ' + (item.status === '已联系' ? 'contact-record-done' : '')} key={item.id}>
+                      <div className="contact-record-main">
+                        <div className="contact-record-info">
+                          <h4>{item.pet}</h4>
+                          <p className="contact-meta">{item.ownerPhone}</p>
+                          <p className="contact-vaccine">{item.vaccine}</p>
+                        </div>
+                        <div className="contact-record-side">
+                          <span className={'status ' + statusClass(item.status)}>{item.status}</span>
+                          <span className="days-badge upcoming-badge">还有{daysDiff(item.nextDate)}天</span>
+                        </div>
+                      </div>
+                      <div className="contact-actions">
+                        {item.status === '已联系' ? (
+                          <button className="mark-contact-btn revert-btn" type="button" onClick={() => updateStatus(item.id, '待联系')}>
+                            <RotateCcw size={14} />重新标记为待联系
+                          </button>
+                        ) : (
+                          <button className="mark-contact-btn" type="button" onClick={() => updateStatus(item.id, '已联系')}>
+                            <CheckCircle2 size={14} />标记已联系
+                          </button>
+                        )}
+                      </div>
+                    </article>
+                  ))
+                )}
+              </div>
+            </div>
           </div>
         </section>
-      </section>
+      )}
 
-      <section className="insights">
-        <div className="panel">
-          <div className="panel-title">
-            <CalendarDays size={18} />
-            <h2>{appConfig.directory ? '证据目录预览' : appConfig.board ? '床位看板' : '分组视图'}</h2>
-          </div>
-          {appConfig.directory ? (
-            <div className="directory">
-              {Object.entries(directory).map(([issue, items]) => (
-                <div key={issue} className="directory-group">
-                  <strong>{issue}</strong>
-                  {items.map((item, index) => <span key={item.id}>{index + 1}. {item.evidence}｜{item.purpose}</span>)}
+      {currentView === 'owners' && (
+        <section className="owner-section">
+          {!selectedOwner ? (
+            <div className="owner-list-panel">
+              <div className="panel">
+                <div className="panel-title">
+                  <Users size={18} />
+                  <h2>主人档案列表</h2>
                 </div>
-              ))}
-            </div>
-          ) : (
-            <div className="date-groups">
-              {Object.entries(groupedByDate).map(([date, items]) => (
-                <div key={date} className="date-group">
-                  <strong>{date}</strong>
-                  <span>{items.length}条记录</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <aside className="panel detail-panel">
-          <div className="panel-title">
-            <CheckCircle2 size={18} />
-            <h2>详情</h2>
-          </div>
-          {selected ? (
-            <div className="detail">
-              <h3>{selected.pet}</h3>
-              <p>{`${selected.species} · ${selected.vaccine} · ${selected.ownerPhone}`}</p>
-              <p>{`下次提醒：${selected.nextDate}`}</p>
-              {selected.temps && (
-                <div className="temp-chart">
-                  {selected.temps.map((value, index) => <i key={index} style={{ height: Math.max(10, 56 + Number(value) * 8) }} title={String(value)} />)}
-                </div>
-              )}
-              <div className="timeline">
-                {(selected.timeline || []).map((step, index) => (
-                  <span key={index}>{step.at} · {step.status} · {step.by}</span>
-                ))}
-              </div>
-
-              <div className="notes-section">
-                <div className="notes-title">
-                  <MessageSquareText size={18} />
-                  <h4>联系备注</h4>
-                  <span className="notes-count">{(selected.notes || []).length}条</span>
-                </div>
-
-                <div className="notes-add-form">
-                  <label className="notes-input-label">
-                    <User size={14} />
-                    <input
-                      type="text"
-                      value={newNoteOperator}
-                      onChange={(event) => setNewNoteOperator(event.target.value)}
-                      placeholder="操作人姓名"
-                    />
-                  </label>
-                  <textarea
-                    className="notes-textarea"
-                    value={newNoteContent}
-                    onChange={(event) => setNewNoteContent(event.target.value)}
-                    placeholder="输入备注内容..."
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' && !event.shiftKey) {
-                        event.preventDefault();
-                        addNote(selected.id);
-                      }
-                    }}
+                <div className="owner-search">
+                  <Search size={16} />
+                  <input
+                    value={ownerSearch}
+                    onChange={(e) => setOwnerSearch(e.target.value)}
+                    placeholder="搜索主人手机号或宠物名"
                   />
-                  <button
-                    className="notes-add-btn"
-                    type="button"
-                    onClick={() => addNote(selected.id)}
-                    disabled={!newNoteContent.trim()}
-                  >
-                    <Plus size={16} />
-                    添加备注
-                  </button>
                 </div>
-
-                <div className="notes-list">
-                  {selected.notes && selected.notes.length > 0 &&
-                    [...selected.notes].reverse().map((note) => (
-                      <div className="note-item" key={note.id}>
-                        <div className="note-header">
-                          <span className="note-operator">
-                            <User size={12} />
-                            {note.createdBy}
-                          </span>
-                          <span className="note-date">
-                            <Calendar size={12} />
-                            {new Date(note.createdAt).toLocaleString('zh-CN', {
-                              year: 'numeric',
-                              month: '2-digit',
-                              day: '2-digit',
-                              hour: '2-digit',
-                              minute: '2-digit'
-                            })}
-                          </span>
-                          <button
-                            className="note-delete-btn"
-                            type="button"
-                            onClick={() => removeNote(selected.id, note.id)}
-                            title="删除备注"
-                          >
-                            <X size={14} />
-                          </button>
+                <div className="owner-list">
+                  {filteredOwnerProfiles.length === 0 ? (
+                    <p className="empty-group">暂无主人档案</p>
+                  ) : (
+                    filteredOwnerProfiles.map((profile) => (
+                      <article
+                        className="owner-card"
+                        key={profile.ownerPhone}
+                        onClick={() => setSelectedOwner(profile)}
+                      >
+                        <div className="owner-card-header">
+                          <div className="owner-avatar">
+                            <User size={24} />
+                          </div>
+                          <div className="owner-info">
+                            <h3>{profile.ownerPhone}</h3>
+                            <p>
+                              <PawPrint size={12} />
+                              {profile.totalCount} 只宠物
+                              {profile.pendingCount > 0 && (
+                                <span className="pending-badge">{profile.pendingCount} 待联系</span>
+                              )}
+                            </p>
+                          </div>
+                          <ChevronRight size={20} className="owner-arrow" />
                         </div>
-                        <div className="note-content">{note.content}</div>
-                      </div>
+                        <div className="owner-pet-preview">
+                          {profile.pets.slice(0, 3).map((pet) => (
+                            <span key={pet.id} className="pet-tag">
+                              {pet.pet}
+                            </span>
+                          ))}
+                          {profile.pets.length > 3 && (
+                            <span className="pet-tag more">+{profile.pets.length - 3}</span>
+                          )}
+                        </div>
+                        <div className="owner-last-contact">
+                          <Clock size={12} />
+                          最近联系：
+                          {profile.lastContactTime
+                            ? new Date(profile.lastContactTime).toLocaleDateString('zh-CN')
+                            : '暂无记录'}
+                        </div>
+                      </article>
                     ))
-                  }
-                  {(!selected.notes || selected.notes.length === 0) && (
-                    <p className="notes-empty">暂无备注记录</p>
                   )}
                 </div>
               </div>
             </div>
           ) : (
-            <p className="empty">点击任意记录查看详情和状态流转。</p>
+            <div className="owner-detail-panel">
+              <div className="panel">
+                <div className="owner-detail-header">
+                  <button
+                    className="back-btn"
+                    onClick={() => setSelectedOwner(null)}
+                  >
+                    <ArrowLeft size={18} />
+                    返回列表
+                  </button>
+                  <div className="owner-detail-info">
+                    <div className="owner-avatar large">
+                      <User size={32} />
+                    </div>
+                    <div>
+                      <h2>{selectedOwner.ownerPhone}</h2>
+                      <p>
+                        共 {selectedOwner.totalCount} 只宠物
+                        {selectedOwner.pendingCount > 0 && (
+                          <span className="pending-badge">{selectedOwner.pendingCount} 只待联系</span>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="owner-detail-section">
+                  <div className="section-title">
+                    <PawPrint size={16} />
+                    <h3>名下宠物</h3>
+                  </div>
+                  <div className="owner-pets-list">
+                    {selectedOwner.pets.map((pet) => (
+                      <div className="owner-pet-card" key={pet.id}>
+                        <div className="pet-card-main">
+                          <div className="pet-info">
+                            <h4>{pet.pet}</h4>
+                            <p className="pet-meta">{pet.species} · {pet.vaccine}</p>
+                            <p className="pet-date">下次提醒：{pet.nextDate || '未设置'}</p>
+                          </div>
+                          <div className="pet-status">
+                            <span className={'status ' + statusClass(pet.status)}>{pet.status}</span>
+                            {isOverdue(pet.nextDate) && pet.status === '待联系' && (
+                              <span className="days-badge overdue-badge">已逾期</span>
+                            )}
+                            {isToday(pet.nextDate) && pet.status === '待联系' && (
+                              <span className="days-badge today-badge">今天</span>
+                            )}
+                            {isWithin7DaysExcludingToday(pet.nextDate) && pet.status === '待联系' && (
+                              <span className="days-badge upcoming-badge">{daysDiff(pet.nextDate)}天后</span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="pet-card-actions">
+                          {appConfig.statuses.map((status) => (
+                            <button
+                              key={status}
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); updateStatus(pet.id, status); }}
+                            >
+                              {status}
+                            </button>
+                          ))}
+                          <button
+                            className="view-record-btn"
+                            type="button"
+                            onClick={() => jumpToRecord(pet.id)}
+                          >
+                            <ClipboardList size={14} />
+                            查看记录
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="owner-detail-section">
+                  <div className="section-title">
+                    <Clock size={16} />
+                    <h3>最近联系时间</h3>
+                  </div>
+                  <div className="owner-contact-info">
+                    {selectedOwner.lastContactTime ? (
+                      <p>
+                        最近一次联系：
+                        <strong>
+                          {new Date(selectedOwner.lastContactTime).toLocaleString('zh-CN', {
+                            year: 'numeric',
+                            month: '2-digit',
+                            day: '2-digit',
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          })}
+                        </strong>
+                      </p>
+                    ) : (
+                      <p className="empty-text">暂无联系记录</p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="owner-detail-section">
+                  <div className="section-title">
+                    <CalendarCheck size={16} />
+                    <h3>疫苗提醒概览</h3>
+                  </div>
+                  <div className="vaccine-overview">
+                    <div className="overview-item">
+                      <span className="overview-label">待联系</span>
+                      <span className="overview-value pending">{selectedOwner.pets.filter(p => p.status === '待联系').length}</span>
+                    </div>
+                    <div className="overview-item">
+                      <span className="overview-label">已联系</span>
+                      <span className="overview-value contacted">{selectedOwner.pets.filter(p => p.status === '已联系').length}</span>
+                    </div>
+                    <div className="overview-item">
+                      <span className="overview-label">已接种</span>
+                      <span className="overview-value done">{selectedOwner.pets.filter(p => p.status === '已接种').length}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
           )}
-        </aside>
-      </section>
+        </section>
+      )}
+
+      {currentView === 'records' && (
+        <>
+          <section className="workspace">
+            <form className="panel form-panel" onSubmit={addRecord}>
+              <div className="panel-title">
+                <ClipboardList size={18} />
+                <h2>新增记录</h2>
+              </div>
+              <div className="form-grid">
+                {appConfig.fields.map((field) => (
+                  <label key={field.key} className={field.type === 'textarea' ? 'wide' : ''}>
+                    <span>{field.label}</span>
+                    {field.type === 'textarea' ? (
+                      <textarea value={form[field.key] || ''} onChange={(event) => setForm({ ...form, [field.key]: event.target.value })} placeholder={field.placeholder} />
+                    ) : field.type === 'select' ? (
+                      <select value={form[field.key] || ''} onChange={(event) => setForm({ ...form, [field.key]: event.target.value })}>
+                        {field.options.map((option) => <option key={option}>{option}</option>)}
+                      </select>
+                    ) : (
+                      <input type={field.type} value={form[field.key] || ''} onChange={(event) => setForm({ ...form, [field.key]: event.target.value })} placeholder={field.placeholder} />
+                    )}
+                  </label>
+                ))}
+                <label>
+                  <span>当前状态</span>
+                  <select value={form.status || appConfig.primaryStatus} onChange={(event) => setForm({ ...form, status: event.target.value })}>
+                    {appConfig.statuses.map((status) => <option key={status}>{status}</option>)}
+                  </select>
+                </label>
+              </div>
+              <button className="primary" type="submit"><Plus size={18} />新增</button>
+              <button type="button" className="import-btn" onClick={() => setShowImportModal(true)}><Upload size={18} />批量导入CSV</button>
+              <p className="hint">{appConfig.note}</p>
+            </form>
+
+            <section className="panel list-panel">
+              <div className="toolbar">
+                <div className="search">
+                  <Search size={16} />
+                  <input value={filters.query} onChange={(event) => setFilters({ ...filters, query: event.target.value })} placeholder={appConfig.filters[0]?.label || '搜索'} />
+                </div>
+                <select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}>
+                  <option>全部</option>
+                  {appConfig.statuses.map((status) => <option key={status}>{status}</option>)}
+                </select>
+              </div>
+
+              <div className="records">
+                {filteredRecords.map((item) => (
+                  <article className={'record ' + (item.conflict || hasOverlap(item, records) ? 'conflict' : '')} key={item.id} onClick={() => setSelected(item)}>
+                    <div className="record-head">
+                      <div>
+                        <h3>{item.pet}</h3>
+                        <p>{`${item.species} · ${item.vaccine} · ${item.ownerPhone}`}</p>
+                      </div>
+                      <span className={'status ' + statusClass(item.status)}>{item.status}</span>
+                    </div>
+                    <p className="record-detail">{`下次提醒：${item.nextDate}`}</p>
+                    {(item.conflict || hasOverlap(item, records)) && <div className="warning"><AlertTriangle size={15} />发现冲突</div>}
+                    <div className="actions" onClick={(event) => event.stopPropagation()}>
+                      {appConfig.statuses.map((status) => (
+                        <button key={status} type="button" onClick={() => updateStatus(item.id, status)}>{status}</button>
+                      ))}
+                      {appConfig.action === 'copyRecipe' && <button type="button" onClick={() => duplicateRecord(item)}><RotateCcw size={14} />复制</button>}
+                      {appConfig.chart && <button type="button" onClick={() => addTemperature(item)}>加温度</button>}
+                      <button className="ghost-danger" type="button" onClick={() => removeRecord(item.id)}><Trash2 size={14} /></button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </section>
+          </section>
+
+          <section className="insights">
+            <div className="panel">
+              <div className="panel-title">
+                <CalendarDays size={18} />
+                <h2>{appConfig.directory ? '证据目录预览' : appConfig.board ? '床位看板' : '分组视图'}</h2>
+              </div>
+              {appConfig.directory ? (
+                <div className="directory">
+                  {Object.entries(directory).map(([issue, items]) => (
+                    <div key={issue} className="directory-group">
+                      <strong>{issue}</strong>
+                      {items.map((item, index) => <span key={item.id}>{index + 1}. {item.evidence}｜{item.purpose}</span>)}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="date-groups">
+                  {Object.entries(groupedByDate).map(([date, items]) => (
+                    <div key={date} className="date-group">
+                      <strong>{date}</strong>
+                      <span>{items.length}条记录</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <aside className="panel detail-panel">
+              <div className="panel-title">
+                <CheckCircle2 size={18} />
+                <h2>详情</h2>
+              </div>
+              {selected ? (
+                <div className="detail">
+                  <h3>{selected.pet}</h3>
+                  <p>{`${selected.species} · ${selected.vaccine} · ${selected.ownerPhone}`}</p>
+                  <p>{`下次提醒：${selected.nextDate}`}</p>
+                  {selected.temps && (
+                    <div className="temp-chart">
+                      {selected.temps.map((value, index) => <i key={index} style={{ height: Math.max(10, 56 + Number(value) * 8) }} title={String(value)} />)}
+                    </div>
+                  )}
+                  <div className="timeline">
+                    {(selected.timeline || []).map((step, index) => (
+                      <span key={index}>{step.at} · {step.status} · {step.by}</span>
+                    ))}
+                  </div>
+
+                  <div className="notes-section">
+                    <div className="notes-title">
+                      <MessageSquareText size={18} />
+                      <h4>联系备注</h4>
+                      <span className="notes-count">{(selected.notes || []).length}条</span>
+                    </div>
+
+                    <div className="notes-add-form">
+                      <label className="notes-input-label">
+                        <User size={14} />
+                        <input
+                          type="text"
+                          value={newNoteOperator}
+                          onChange={(event) => setNewNoteOperator(event.target.value)}
+                          placeholder="操作人姓名"
+                        />
+                      </label>
+                      <textarea
+                        className="notes-textarea"
+                        value={newNoteContent}
+                        onChange={(event) => setNewNoteContent(event.target.value)}
+                        placeholder="输入备注内容..."
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' && !event.shiftKey) {
+                            event.preventDefault();
+                            addNote(selected.id);
+                          }
+                        }}
+                      />
+                      <button
+                        className="notes-add-btn"
+                        type="button"
+                        onClick={() => addNote(selected.id)}
+                        disabled={!newNoteContent.trim()}
+                      >
+                        <Plus size={16} />
+                        添加备注
+                      </button>
+                    </div>
+
+                    <div className="notes-list">
+                      {selected.notes && selected.notes.length > 0 &&
+                        [...selected.notes].reverse().map((note) => (
+                          <div className="note-item" key={note.id}>
+                            <div className="note-header">
+                              <span className="note-operator">
+                                <User size={12} />
+                                {note.createdBy}
+                              </span>
+                              <span className="note-date">
+                                <Calendar size={12} />
+                                {new Date(note.createdAt).toLocaleString('zh-CN', {
+                                  year: 'numeric',
+                                  month: '2-digit',
+                                  day: '2-digit',
+                                  hour: '2-digit',
+                                  minute: '2-digit'
+                                })}
+                              </span>
+                              <button
+                                className="note-delete-btn"
+                                type="button"
+                                onClick={() => removeNote(selected.id, note.id)}
+                                title="删除备注"
+                              >
+                                <X size={14} />
+                              </button>
+                            </div>
+                            <div className="note-content">{note.content}</div>
+                          </div>
+                        ))
+                      }
+                      {(!selected.notes || selected.notes.length === 0) && (
+                        <p className="notes-empty">暂无备注记录</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <p className="empty">点击任意记录查看详情和状态流转。</p>
+              )}
+            </aside>
+          </section>
+        </>
+      )}
 
       {showImportModal && (
         <div className="modal-overlay" onClick={cancelImport}>
