@@ -737,6 +737,11 @@ function App() {
     });
   }, [ownerProfiles, ownerSearch]);
 
+  const selectedOwnerProfile = useMemo(() => {
+    if (!selectedOwner) return null;
+    return ownerProfiles.find((profile) => profile.ownerPhone === selectedOwner.ownerPhone) || selectedOwner;
+  }, [ownerProfiles, selectedOwner]);
+
   function jumpToRecord(recordId) {
     const record = records.find((r) => r.id === recordId);
     if (record) {
@@ -1018,11 +1023,11 @@ function App() {
                       <User size={32} />
                     </div>
                     <div>
-                      <h2>{selectedOwner.ownerPhone}</h2>
+                      <h2>{selectedOwnerProfile.ownerPhone}</h2>
                       <p>
-                        共 {selectedOwner.totalCount} 只宠物
-                        {selectedOwner.pendingCount > 0 && (
-                          <span className="pending-badge">{selectedOwner.pendingCount} 只待联系</span>
+                        共 {selectedOwnerProfile.totalCount} 只宠物
+                        {selectedOwnerProfile.pendingCount > 0 && (
+                          <span className="pending-badge">{selectedOwnerProfile.pendingCount} 只待联系</span>
                         )}
                       </p>
                     </div>
@@ -1035,7 +1040,7 @@ function App() {
                     <h3>名下宠物</h3>
                   </div>
                   <div className="owner-pets-list">
-                    {selectedOwner.pets.map((pet) => (
+                    {selectedOwnerProfile.pets.map((pet) => (
                       <div className="owner-pet-card" key={pet.id}>
                         <div className="pet-card-main">
                           <div className="pet-info">
@@ -1086,11 +1091,11 @@ function App() {
                     <h3>最近联系时间</h3>
                   </div>
                   <div className="owner-contact-info">
-                    {selectedOwner.lastContactTime ? (
+                    {selectedOwnerProfile.lastContactTime ? (
                       <p>
                         最近一次联系：
                         <strong>
-                          {new Date(selectedOwner.lastContactTime).toLocaleString('zh-CN', {
+                          {new Date(selectedOwnerProfile.lastContactTime).toLocaleString('zh-CN', {
                             year: 'numeric',
                             month: '2-digit',
                             day: '2-digit',
@@ -1113,15 +1118,15 @@ function App() {
                   <div className="vaccine-overview">
                     <div className="overview-item">
                       <span className="overview-label">待联系</span>
-                      <span className="overview-value pending">{selectedOwner.pets.filter(p => p.status === '待联系').length}</span>
+                      <span className="overview-value pending">{selectedOwnerProfile.pets.filter(p => p.status === '待联系').length}</span>
                     </div>
                     <div className="overview-item">
                       <span className="overview-label">已联系</span>
-                      <span className="overview-value contacted">{selectedOwner.pets.filter(p => p.status === '已联系').length}</span>
+                      <span className="overview-value contacted">{selectedOwnerProfile.pets.filter(p => p.status === '已联系').length}</span>
                     </div>
                     <div className="overview-item">
                       <span className="overview-label">已接种</span>
-                      <span className="overview-value done">{selectedOwner.pets.filter(p => p.status === '已接种').length}</span>
+                      <span className="overview-value done">{selectedOwnerProfile.pets.filter(p => p.status === '已接种').length}</span>
                     </div>
                   </div>
                 </div>
