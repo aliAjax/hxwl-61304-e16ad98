@@ -347,15 +347,14 @@ function App() {
   ];
 
   const contactListGroups = useMemo(() => {
-    const activeRecords = records.filter((item) => item.status !== '已接种');
     return {
-      overdue: activeRecords
+      overdue: records
         .filter((item) => isOverdue(item.nextDate))
         .sort((a, b) => new Date(a.nextDate) - new Date(b.nextDate)),
-      today: activeRecords
+      today: records
         .filter((item) => isToday(item.nextDate))
         .sort((a, b) => new Date(a.nextDate) - new Date(b.nextDate)),
-      upcoming: activeRecords
+      upcoming: records
         .filter((item) => isWithin7DaysExcludingToday(item.nextDate))
         .sort((a, b) => new Date(a.nextDate) - new Date(b.nextDate)),
     };
