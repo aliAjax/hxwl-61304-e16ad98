@@ -433,8 +433,14 @@ function App() {
     } else {
       [month, day, year] = parts;
     }
-    const date = new Date(`${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`);
-    return date instanceof Date && !isNaN(date) && date.getFullYear() > 2000 && date.getFullYear() < 2100;
+    const y = Number(year);
+    const m = Number(month);
+    const d = Number(day);
+    if (m < 1 || m > 12) return false;
+    if (d < 1 || d > 31) return false;
+    if (y <= 2000 || y >= 2100) return false;
+    const date = new Date(y, m - 1, d);
+    return date.getFullYear() === y && date.getMonth() === m - 1 && date.getDate() === d;
   }
 
   function normalizeDate(dateStr) {
