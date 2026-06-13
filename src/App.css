@@ -441,6 +441,32 @@ textarea { min-height: 76px; resize: vertical; }
   border-color: #047857;
 }
 
+.contact-record-done {
+  opacity: 0.6;
+  background: #f9fafb;
+}
+
+.contact-record-done .contact-record-info h4 {
+  text-decoration: line-through;
+  color: #9ca3af;
+}
+
+.contact-record-done .contact-meta,
+.contact-record-done .contact-vaccine {
+  color: #9ca3af;
+}
+
+.revert-btn {
+  border: 1px solid #6b7280 !important;
+  background: #f9fafb !important;
+  color: #4b5563 !important;
+}
+
+.revert-btn:hover {
+  background: #f3f4f6 !important;
+  border-color: #4b5563 !important;
+}
+
 @media (max-width: 980px) {
   .shell { padding: 16px; }
   .hero, .workspace, .insights, .contact-groups { grid-template-columns: 1fr; display: grid; }

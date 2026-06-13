@@ -88,7 +88,7 @@ const appConfig = {
       "vaccine": "狂犬",
       "lastDate": "2025-06-10",
       "nextDate": "2026-06-10",
-      "status": "待联系"
+      "status": "已联系"
     },
     {
       "pet": "团子",
@@ -350,13 +350,13 @@ function App() {
     const activeRecords = records.filter((item) => item.status !== '已接种');
     return {
       overdue: activeRecords
-        .filter((item) => isOverdue(item.nextDate) && item.status !== '已联系')
+        .filter((item) => isOverdue(item.nextDate))
         .sort((a, b) => new Date(a.nextDate) - new Date(b.nextDate)),
       today: activeRecords
-        .filter((item) => isToday(item.nextDate) && item.status !== '已联系')
+        .filter((item) => isToday(item.nextDate))
         .sort((a, b) => new Date(a.nextDate) - new Date(b.nextDate)),
       upcoming: activeRecords
-        .filter((item) => isWithin7DaysExcludingToday(item.nextDate) && item.status !== '已联系')
+        .filter((item) => isWithin7DaysExcludingToday(item.nextDate))
         .sort((a, b) => new Date(a.nextDate) - new Date(b.nextDate)),
     };
   }, [records]);
@@ -419,7 +419,7 @@ function App() {
                 <p className="empty-group">暂无逾期记录</p>
               ) : (
                 contactListGroups.overdue.map((item) => (
-                  <article className="contact-record" key={item.id}>
+                  <article className={'contact-record ' + (item.status === '已联系' ? 'contact-record-done' : '')} key={item.id}>
                     <div className="contact-record-main">
                       <div className="contact-record-info">
                         <h4>{item.pet}</h4>
@@ -432,9 +432,15 @@ function App() {
                       </div>
                     </div>
                     <div className="contact-actions">
-                      <button className="mark-contact-btn" type="button" onClick={() => updateStatus(item.id, '已联系')}>
-                        <CheckCircle2 size={14} />标记已联系
-                      </button>
+                      {item.status === '已联系' ? (
+                        <button className="mark-contact-btn revert-btn" type="button" onClick={() => updateStatus(item.id, '待联系')}>
+                          <RotateCcw size={14} />重新标记为待联系
+                        </button>
+                      ) : (
+                        <button className="mark-contact-btn" type="button" onClick={() => updateStatus(item.id, '已联系')}>
+                          <CheckCircle2 size={14} />标记已联系
+                        </button>
+                      )}
                     </div>
                   </article>
                 ))
@@ -455,7 +461,7 @@ function App() {
                 <p className="empty-group">今日暂无提醒</p>
               ) : (
                 contactListGroups.today.map((item) => (
-                  <article className="contact-record" key={item.id}>
+                  <article className={'contact-record ' + (item.status === '已联系' ? 'contact-record-done' : '')} key={item.id}>
                     <div className="contact-record-main">
                       <div className="contact-record-info">
                         <h4>{item.pet}</h4>
@@ -468,9 +474,15 @@ function App() {
                       </div>
                     </div>
                     <div className="contact-actions">
-                      <button className="mark-contact-btn" type="button" onClick={() => updateStatus(item.id, '已联系')}>
-                        <CheckCircle2 size={14} />标记已联系
-                      </button>
+                      {item.status === '已联系' ? (
+                        <button className="mark-contact-btn revert-btn" type="button" onClick={() => updateStatus(item.id, '待联系')}>
+                          <RotateCcw size={14} />重新标记为待联系
+                        </button>
+                      ) : (
+                        <button className="mark-contact-btn" type="button" onClick={() => updateStatus(item.id, '已联系')}>
+                          <CheckCircle2 size={14} />标记已联系
+                        </button>
+                      )}
                     </div>
                   </article>
                 ))
@@ -491,7 +503,7 @@ function App() {
                 <p className="empty-group">暂无近期提醒</p>
               ) : (
                 contactListGroups.upcoming.map((item) => (
-                  <article className="contact-record" key={item.id}>
+                  <article className={'contact-record ' + (item.status === '已联系' ? 'contact-record-done' : '')} key={item.id}>
                     <div className="contact-record-main">
                       <div className="contact-record-info">
                         <h4>{item.pet}</h4>
@@ -504,9 +516,15 @@ function App() {
                       </div>
                     </div>
                     <div className="contact-actions">
-                      <button className="mark-contact-btn" type="button" onClick={() => updateStatus(item.id, '已联系')}>
-                        <CheckCircle2 size={14} />标记已联系
-                      </button>
+                      {item.status === '已联系' ? (
+                        <button className="mark-contact-btn revert-btn" type="button" onClick={() => updateStatus(item.id, '待联系')}>
+                          <RotateCcw size={14} />重新标记为待联系
+                        </button>
+                      ) : (
+                        <button className="mark-contact-btn" type="button" onClick={() => updateStatus(item.id, '已联系')}>
+                          <CheckCircle2 size={14} />标记已联系
+                        </button>
+                      )}
                     </div>
                   </article>
                 ))
