@@ -1,6 +1,13 @@
 import { useMemo, useState } from 'react';
-import { Syringe, Plus, Search, Trash2, RotateCcw, CheckCircle2, AlertTriangle, ClipboardList, CalendarDays, PhoneCall, Clock, AlertCircle, CalendarCheck } from 'lucide-react';
+import { Syringe, Plus, Search, Trash2, RotateCcw, CheckCircle2, AlertTriangle, ClipboardList, CalendarDays, PhoneCall, Clock, AlertCircle, CalendarCheck, Calculator, ArrowRight, MessageSquareText, X, User, Calendar } from 'lucide-react';
 import './App.css';
+
+const vaccineIntervalRules = {
+  "猫三联": { days: 365, species: ["猫"], description: "每年接种一次" },
+  "狂犬": { days: 365, species: ["猫", "犬"], description: "每年接种一次" },
+  "犬六联": { days: 365, species: ["犬"], description: "每年接种一次" },
+  "体内驱虫": { days: 90, species: ["猫", "犬", "兔", "其他"], description: "每3个月一次" }
+};
 
 const appConfig = {
   "id": "hxwl-61304",
@@ -168,7 +175,7 @@ function uid() {
 }
 
 function withIds(items) {
-  return items.map((item) => ({ id: uid(), timeline: item.timeline || [{ status: item.status, at: today, by: '系统' }], ...item }));
+  return items.map((item) => ({ id: uid(), ...item, timeline: item.timeline || [{ status: item.status, at: today, by: '系统' }], notes: item.notes || [] }));
 }
 
 function loadRecords() {
@@ -228,6 +235,21 @@ function daysDiff(dateText) {
   return Math.round((date.getTime() - now.getTime()) / 86400000);
 }
 
+function calculateNextVaccineDate(lastDate, vaccineType) {
+  if (!lastDate || !vaccineType) return null;
+  const rule = vaccineIntervalRules[vaccineType];
+  if (!rule) return null;
+  const date = new Date(lastDate);
+  date.setDate(date.getDate() + rule.days);
+  return date.toISOString().slice(0, 10);
+}
+
+function getAvailableVaccinesForSpecies(species) {
+  return Object.entries(vaccineIntervalRules)
+    .filter(([_, rule]) => rule.species.includes(species))
+    .map(([vaccine]) => vaccine);
+}
+
 function latestTemp(item) {
   const temps = item.temps || [Number(item.temperature)];
   return temps[temps.length - 1];
@@ -257,6 +279,13 @@ function App() {
   const [form, setForm] = useState(appConfig.defaultValues);
   const [filters, setFilters] = useState({ query: '', status: '全部' });
   const [selected, setSelected] = useState(null);
+  const [calculator, setCalculator] = useState({
+    species: '猫',
+    vaccine: '猫三联',
+    lastDate: ''
+  });
+  const [newNoteContent, setNewNoteContent] = useState('');
+  const [newNoteOperator, setNewNoteOperator] = useState('');
 
   function persist(next) {
     setRecords(next);
@@ -270,7 +299,8 @@ function App() {
       ...form,
       status: form.status || appConfig.primaryStatus,
       createdAt: new Date().toISOString(),
-      timeline: [{ status: form.status || appConfig.primaryStatus, at: today, by: '录入' }]
+      timeline: [{ status: form.status || appConfig.primaryStatus, at: today, by: '录入' }],
+      notes: []
     };
 
     if (appConfig.conflict === 'date-slot' && records.some((item) => item.date === nextRecord.date && item.slot === nextRecord.slot)) {
@@ -290,6 +320,35 @@ function App() {
     setSelected(nextRecord);
   }
 
+  function addNote(recordId) {
+    if (!newNoteContent.trim()) return;
+    const note = {
+      id: uid(),
+      content: newNoteContent.trim(),
+      createdAt: new Date().toISOString(),
+      createdBy: newNoteOperator.trim() || '未署名'
+    };
+    const next = records.map((item) => item.id === recordId ? {
+      ...item,
+      notes: [...(item.notes || []), note]
+    } : item);
+    persist(next);
+    const updated = next.find((item) => item.id === recordId);
+    if (selected?.id === recordId) setSelected(updated);
+    setNewNoteContent('');
+    setNewNoteOperator('');
+  }
+
+  function removeNote(recordId, noteId) {
+    const next = records.map((item) => item.id === recordId ? {
+      ...item,
+      notes: (item.notes || []).filter((n) => n.id !== noteId)
+    } : item);
+    persist(next);
+    const updated = next.find((item) => item.id === recordId);
+    if (selected?.id === recordId) setSelected(updated);
+  }
+
   function updateStatus(id, status) {
     const next = records.map((item) => item.id === id ? {
       ...item,
@@ -307,7 +366,7 @@ function App() {
   }
 
   function duplicateRecord(item) {
-    const copied = { ...item, id: uid(), status: appConfig.primaryStatus, timeline: [{ status: appConfig.primaryStatus, at: today, by: '复制' }] };
+    const copied = { ...item, id: uid(), status: appConfig.primaryStatus, timeline: [{ status: appConfig.primaryStatus, at: today, by: '复制' }], notes: [] };
     persist([copied, ...records]);
     setSelected(copied);
   }
@@ -323,6 +382,38 @@ function App() {
     } : record);
     persist(next);
     setSelected(next.find((record) => record.id === item.id));
+  }
+
+  const calculatorResult = useMemo(() => {
+    if (!calculator.lastDate || !calculator.vaccine) return null;
+    const nextDate = calculateNextVaccineDate(calculator.lastDate, calculator.vaccine);
+    const rule = vaccineIntervalRules[calculator.vaccine];
+    if (!nextDate || !rule) return null;
+    const daysUntil = daysDiff(nextDate);
+    return {
+      nextDate,
+      intervalDays: rule.days,
+      description: rule.description,
+      daysUntil,
+      isOverdue: daysUntil < 0,
+      isToday: daysUntil === 0,
+      isUpcoming: daysUntil > 0 && daysUntil <= 7
+    };
+  }, [calculator]);
+
+  const availableVaccines = useMemo(() => {
+    return getAvailableVaccinesForSpecies(calculator.species);
+  }, [calculator.species]);
+
+  function fillCalculatorToForm() {
+    if (!calculatorResult) return;
+    setForm({
+      ...form,
+      species: calculator.species,
+      vaccine: calculator.vaccine,
+      lastDate: calculator.lastDate,
+      nextDate: calculatorResult.nextDate
+    });
   }
 
   const filteredRecords = useMemo(() => {
@@ -533,6 +624,99 @@ function App() {
         </div>
       </section>
 
+      <section className="panel calculator-panel">
+        <div className="panel-title">
+          <Calculator size={18} />
+          <h2>疫苗到期日计算器</h2>
+          <span className="calculator-badge">快捷计算</span>
+        </div>
+        <div className="calculator-content">
+          <div className="calculator-form">
+            <div className="calculator-form-grid">
+              <label>
+                <span>物种</span>
+                <select
+                  value={calculator.species}
+                  onChange={(event) => {
+                    const newSpecies = event.target.value;
+                    const vaccines = getAvailableVaccinesForSpecies(newSpecies);
+                    setCalculator({
+                      ...calculator,
+                      species: newSpecies,
+                      vaccine: vaccines[0] || ''
+                    });
+                  }}
+                >
+                  {appConfig.fields.find(f => f.key === 'species').options.map((option) => (
+                    <option key={option}>{option}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>疫苗类型</span>
+                <select
+                  value={calculator.vaccine}
+                  onChange={(event) => setCalculator({ ...calculator, vaccine: event.target.value })}
+                >
+                  {availableVaccines.map((option) => (
+                    <option key={option}>{option}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="calculator-date-label">
+                <span>上次接种日期</span>
+                <input
+                  type="date"
+                  value={calculator.lastDate}
+                  max={today}
+                  onChange={(event) => setCalculator({ ...calculator, lastDate: event.target.value })}
+                />
+              </label>
+            </div>
+          </div>
+
+          <div className="calculator-arrow">
+            <ArrowRight size={24} className="arrow-icon" />
+          </div>
+
+          <div className="calculator-result">
+            {calculatorResult ? (
+              <div className="result-content">
+                <div className="result-header">
+                  <span className="result-label">建议下次接种日期</span>
+                  <span className={`result-days-badge ${calculatorResult.isOverdue ? 'overdue' : calculatorResult.isToday ? 'today' : calculatorResult.isUpcoming ? 'upcoming' : ''}`}>
+                    {calculatorResult.isOverdue ? `已逾期${Math.abs(calculatorResult.daysUntil)}天` :
+                     calculatorResult.isToday ? '今天到期' :
+                     calculatorResult.isUpcoming ? `还有${calculatorResult.daysUntil}天` :
+                     `${calculatorResult.daysUntil}天后`}
+                  </span>
+                </div>
+                <div className="result-date">
+                  <CalendarDays size={28} className="result-date-icon" />
+                  <span className="result-date-text">{calculatorResult.nextDate}</span>
+                </div>
+                <div className="result-meta">
+                  <span className="result-interval">间隔 {calculatorResult.intervalDays} 天 · {calculatorResult.description}</span>
+                </div>
+                <button
+                  className="fill-form-btn"
+                  type="button"
+                  onClick={fillCalculatorToForm}
+                >
+                  <Plus size={16} />
+                  一键填入新增表单
+                </button>
+              </div>
+            ) : (
+              <div className="result-placeholder">
+                <Calculator size={36} className="placeholder-icon" />
+                <p>选择物种、疫苗类型和上次接种日期<br />自动计算下次提醒日期</p>
+              </div>
+            )}
+          </div>
+        </div>
+      </section>
+
       <section className="workspace">
         <form className="panel form-panel" onSubmit={addRecord}>
           <div className="panel-title">
@@ -649,6 +833,84 @@ function App() {
                 {(selected.timeline || []).map((step, index) => (
                   <span key={index}>{step.at} · {step.status} · {step.by}</span>
                 ))}
+              </div>
+
+              <div className="notes-section">
+                <div className="notes-title">
+                  <MessageSquareText size={18} />
+                  <h4>联系备注</h4>
+                  <span className="notes-count">{(selected.notes || []).length}条</span>
+                </div>
+
+                <div className="notes-add-form">
+                  <label className="notes-input-label">
+                    <User size={14} />
+                    <input
+                      type="text"
+                      value={newNoteOperator}
+                      onChange={(event) => setNewNoteOperator(event.target.value)}
+                      placeholder="操作人姓名"
+                    />
+                  </label>
+                  <textarea
+                    className="notes-textarea"
+                    value={newNoteContent}
+                    onChange={(event) => setNewNoteContent(event.target.value)}
+                    placeholder="输入备注内容..."
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' && !event.shiftKey) {
+                        event.preventDefault();
+                        addNote(selected.id);
+                      }
+                    }}
+                  />
+                  <button
+                    className="notes-add-btn"
+                    type="button"
+                    onClick={() => addNote(selected.id)}
+                    disabled={!newNoteContent.trim()}
+                  >
+                    <Plus size={16} />
+                    添加备注
+                  </button>
+                </div>
+
+                <div className="notes-list">
+                  {selected.notes && selected.notes.length > 0 &&
+                    [...selected.notes].reverse().map((note) => (
+                      <div className="note-item" key={note.id}>
+                        <div className="note-header">
+                          <span className="note-operator">
+                            <User size={12} />
+                            {note.createdBy}
+                          </span>
+                          <span className="note-date">
+                            <Calendar size={12} />
+                            {new Date(note.createdAt).toLocaleString('zh-CN', {
+                              year: 'numeric',
+                              month: '2-digit',
+                              day: '2-digit',
+                              hour: '2-digit',
+                              minute: '2-digit'
+                            })}
+                          </span>
+                          <button
+                            className="note-delete-btn"
+                            type="button"
+                            onClick={() => removeNote(selected.id, note.id)}
+                            title="删除备注"
+                          >
+                            <X size={14} />
+                          </button>
+                        </div>
+                        <div className="note-content">{note.content}</div>
+                      </div>
+                    ))
+                  }
+                  {(!selected.notes || selected.notes.length === 0) && (
+                    <p className="notes-empty">暂无备注记录</p>
+                  )}
+                </div>
               </div>
             </div>
           ) : (
