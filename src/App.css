@@ -1899,6 +1899,18 @@ textarea { min-height: 76px; resize: vertical; }
   font-weight: 700;
 }
 
+.manual-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  background: #fffbeb;
+  color: #b45309;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
 .field-hint {
   display: block;
   font-size: 12px;

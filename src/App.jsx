@@ -305,6 +305,7 @@ function App() {
   const [templates, setTemplates] = useState(loadTemplates);
   const [editingTemplate, setEditingTemplate] = useState(null);
   const [templateForm, setTemplateForm] = useState({ species: '', vaccine: '', days: '' });
+  const [nextDateManual, setNextDateManual] = useState(false);
 
   function persist(next) {
     setRecords(next);
@@ -367,9 +368,12 @@ function App() {
 
   function addRecord(event) {
     event.preventDefault();
+    const autoNext = calcNextDate(form.lastDate, form.species, form.vaccine, templates);
+    const finalNextDate = form.nextDate || autoNext;
     const nextRecord = {
       id: uid(),
       ...form,
+      nextDate: finalNextDate,
       status: form.status || appConfig.primaryStatus,
       createdAt: new Date().toISOString(),
       timeline: [{ status: form.status || appConfig.primaryStatus, at: today, by: '录入' }],
@@ -390,6 +394,7 @@ function App() {
 
     persist([nextRecord, ...records]);
     setForm(appConfig.defaultValues);
+    setNextDateManual(false);
     setSelected(nextRecord);
   }
 
@@ -1343,45 +1348,66 @@ function App() {
                 {appConfig.fields.map((field) => {
                   const isAutoField = field.key === 'nextDate';
                   const autoNext = calcNextDate(form.lastDate, form.species, form.vaccine, templates);
-                  const isAutoCalculated = isAutoField && autoNext && form.nextDate === autoNext;
+                  const isAutoCalculated = isAutoField && autoNext && form.nextDate === autoNext && !nextDateManual;
                   return (
                     <label key={field.key} className={field.type === 'textarea' ? 'wide' : ''}>
                       <span>
                         {field.label}
                         {isAutoField && isAutoCalculated && <span className="auto-badge">自动生成</span>}
+                        {isAutoField && nextDateManual && form.nextDate && <span className="manual-badge">手动覆盖</span>}
                       </span>
                       {field.type === 'textarea' ? (
                         <textarea value={form[field.key] || ''} onChange={(event) => setForm({ ...form, [field.key]: event.target.value })} placeholder={field.placeholder} />
                       ) : field.type === 'select' ? (
                         <select value={form[field.key] || ''} onChange={(event) => {
                           const next = { ...form, [field.key]: event.target.value };
-                          const newAutoNext = calcNextDate(
-                            field.key === 'species' ? next.lastDate : form.lastDate,
-                            field.key === 'species' ? event.target.value : form.species,
-                            field.key === 'vaccine' ? event.target.value : form.vaccine,
-                            templates
-                          );
-                          if (newAutoNext && (field.key === 'species' || field.key === 'vaccine')) {
+                          const newSpecies = field.key === 'species' ? event.target.value : form.species;
+                          const newVaccine = field.key === 'vaccine' ? event.target.value : form.vaccine;
+                          const newLastDate = form.lastDate;
+                          const newAutoNext = calcNextDate(newLastDate, newSpecies, newVaccine, templates);
+                          if (!nextDateManual) {
+                            next.nextDate = newAutoNext || '';
+                          } else if (newAutoNext) {
                             next.nextDate = newAutoNext;
+                            setNextDateManual(false);
                           }
                           setForm(next);
                         }}>
                           {field.options.map((option) => <option key={option}>{option}</option>)}
                         </select>
-                      ) : (
+                      ) : field.key === 'lastDate' ? (
                         <input
                           type={field.type}
                           value={form[field.key] || ''}
                           onChange={(event) => {
-                            const next = { ...form, [field.key]: event.target.value };
-                            if (field.key === 'lastDate') {
-                              const newAutoNext = calcNextDate(event.target.value, form.species, form.vaccine, templates);
-                              if (newAutoNext) {
-                                next.nextDate = newAutoNext;
-                              }
+                            const val = event.target.value;
+                            const next = { ...form, [field.key]: val };
+                            const newAutoNext = calcNextDate(val, form.species, form.vaccine, templates);
+                            if (newAutoNext) {
+                              next.nextDate = newAutoNext;
+                              setNextDateManual(false);
+                            } else if (!nextDateManual) {
+                              next.nextDate = '';
                             }
                             setForm(next);
                           }}
+                          placeholder={field.placeholder}
+                        />
+                      ) : field.key === 'nextDate' ? (
+                        <input
+                          type={field.type}
+                          value={form[field.key] || ''}
+                          onChange={(event) => {
+                            setForm({ ...form, nextDate: event.target.value });
+                            setNextDateManual(!!event.target.value && event.target.value !== autoNext);
+                          }}
+                          placeholder={field.placeholder}
+                        />
+                      ) : (
+                        <input
+                          type={field.type}
+                          value={form[field.key] || ''}
+                          onChange={(event) => setForm({ ...form, [field.key]: event.target.value })}
                           placeholder={field.placeholder}
                         />
                       )}
