@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Syringe, Plus, Search, Trash2, RotateCcw, CheckCircle2, AlertTriangle, ClipboardList, CalendarDays } from 'lucide-react';
+import { Syringe, Plus, Search, Trash2, RotateCcw, CheckCircle2, AlertTriangle, ClipboardList, CalendarDays, PhoneCall, Clock, AlertCircle, CalendarCheck } from 'lucide-react';
 import './App.css';
 
 const appConfig = {
@@ -86,15 +86,33 @@ const appConfig = {
       "species": "犬",
       "ownerPhone": "13900006666",
       "vaccine": "狂犬",
-      "lastDate": "2025-06-16",
-      "nextDate": "2026-06-16",
-      "status": "已联系"
+      "lastDate": "2025-06-10",
+      "nextDate": "2026-06-10",
+      "status": "待联系"
     },
     {
       "pet": "团子",
       "species": "兔",
       "ownerPhone": "13700001111",
       "vaccine": "体内驱虫",
+      "lastDate": "2026-05-13",
+      "nextDate": "2026-06-13",
+      "status": "待联系"
+    },
+    {
+      "pet": "小白",
+      "species": "猫",
+      "ownerPhone": "13600002222",
+      "vaccine": "狂犬",
+      "lastDate": "2026-05-20",
+      "nextDate": "2026-06-18",
+      "status": "待联系"
+    },
+    {
+      "pet": "豆豆",
+      "species": "犬",
+      "ownerPhone": "13500003333",
+      "vaccine": "犬六联",
       "lastDate": "2026-06-01",
       "nextDate": "2026-06-28",
       "status": "已接种"
@@ -181,6 +199,33 @@ function inNextDays(dateText, days) {
   const now = new Date(today);
   const diff = (date.getTime() - now.getTime()) / 86400000;
   return diff >= 0 && diff <= days;
+}
+
+function isOverdue(dateText) {
+  if (!dateText) return false;
+  const date = new Date(dateText);
+  const now = new Date(today);
+  return date.getTime() < now.getTime();
+}
+
+function isToday(dateText) {
+  if (!dateText) return false;
+  return dateText === today;
+}
+
+function isWithin7DaysExcludingToday(dateText) {
+  if (!dateText) return false;
+  const date = new Date(dateText);
+  const now = new Date(today);
+  const diff = (date.getTime() - now.getTime()) / 86400000;
+  return diff > 0 && diff <= 7;
+}
+
+function daysDiff(dateText) {
+  if (!dateText) return 0;
+  const date = new Date(dateText);
+  const now = new Date(today);
+  return Math.round((date.getTime() - now.getTime()) / 86400000);
 }
 
 function latestTemp(item) {
@@ -301,6 +346,21 @@ function App() {
     { label: "本周提醒", value: records.filter((item) => inNextDays(item.nextDate, 7)).length },
   ];
 
+  const contactListGroups = useMemo(() => {
+    const activeRecords = records.filter((item) => item.status !== '已接种');
+    return {
+      overdue: activeRecords
+        .filter((item) => isOverdue(item.nextDate) && item.status !== '已联系')
+        .sort((a, b) => new Date(a.nextDate) - new Date(b.nextDate)),
+      today: activeRecords
+        .filter((item) => isToday(item.nextDate) && item.status !== '已联系')
+        .sort((a, b) => new Date(a.nextDate) - new Date(b.nextDate)),
+      upcoming: activeRecords
+        .filter((item) => isWithin7DaysExcludingToday(item.nextDate) && item.status !== '已联系')
+        .sort((a, b) => new Date(a.nextDate) - new Date(b.nextDate)),
+    };
+  }, [records]);
+
   const groupedByDate = useMemo(() => {
     return filteredRecords.reduce((acc, item) => {
       const key = item[appConfig.dateKey] || item.date || item.enrollDate || '未排期';
@@ -338,6 +398,122 @@ function App() {
             <strong>{metric.value}</strong>
           </article>
         ))}
+      </section>
+
+      <section className="panel contact-list-panel">
+        <div className="panel-title">
+          <PhoneCall size={18} />
+          <h2>今日联系清单</h2>
+        </div>
+        <div className="contact-groups">
+          <div className="contact-group overdue-group">
+            <div className="contact-group-header">
+              <div className="contact-group-title">
+                <AlertCircle size={16} className="contact-group-icon overdue-icon" />
+                <h3>已逾期</h3>
+                <span className="contact-count">{contactListGroups.overdue.length}</span>
+              </div>
+            </div>
+            <div className="contact-records">
+              {contactListGroups.overdue.length === 0 ? (
+                <p className="empty-group">暂无逾期记录</p>
+              ) : (
+                contactListGroups.overdue.map((item) => (
+                  <article className="contact-record" key={item.id}>
+                    <div className="contact-record-main">
+                      <div className="contact-record-info">
+                        <h4>{item.pet}</h4>
+                        <p className="contact-meta">{item.ownerPhone}</p>
+                        <p className="contact-vaccine">{item.vaccine}</p>
+                      </div>
+                      <div className="contact-record-side">
+                        <span className={'status ' + statusClass(item.status)}>{item.status}</span>
+                        <span className="days-badge overdue-badge">逾期{Math.abs(daysDiff(item.nextDate))}天</span>
+                      </div>
+                    </div>
+                    <div className="contact-actions">
+                      <button className="mark-contact-btn" type="button" onClick={() => updateStatus(item.id, '已联系')}>
+                        <CheckCircle2 size={14} />标记已联系
+                      </button>
+                    </div>
+                  </article>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div className="contact-group today-group">
+            <div className="contact-group-header">
+              <div className="contact-group-title">
+                <Clock size={16} className="contact-group-icon today-icon" />
+                <h3>今日提醒</h3>
+                <span className="contact-count">{contactListGroups.today.length}</span>
+              </div>
+            </div>
+            <div className="contact-records">
+              {contactListGroups.today.length === 0 ? (
+                <p className="empty-group">今日暂无提醒</p>
+              ) : (
+                contactListGroups.today.map((item) => (
+                  <article className="contact-record" key={item.id}>
+                    <div className="contact-record-main">
+                      <div className="contact-record-info">
+                        <h4>{item.pet}</h4>
+                        <p className="contact-meta">{item.ownerPhone}</p>
+                        <p className="contact-vaccine">{item.vaccine}</p>
+                      </div>
+                      <div className="contact-record-side">
+                        <span className={'status ' + statusClass(item.status)}>{item.status}</span>
+                        <span className="days-badge today-badge">今天</span>
+                      </div>
+                    </div>
+                    <div className="contact-actions">
+                      <button className="mark-contact-btn" type="button" onClick={() => updateStatus(item.id, '已联系')}>
+                        <CheckCircle2 size={14} />标记已联系
+                      </button>
+                    </div>
+                  </article>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div className="contact-group upcoming-group">
+            <div className="contact-group-header">
+              <div className="contact-group-title">
+                <CalendarCheck size={16} className="contact-group-icon upcoming-icon" />
+                <h3>未来7天内</h3>
+                <span className="contact-count">{contactListGroups.upcoming.length}</span>
+              </div>
+            </div>
+            <div className="contact-records">
+              {contactListGroups.upcoming.length === 0 ? (
+                <p className="empty-group">暂无近期提醒</p>
+              ) : (
+                contactListGroups.upcoming.map((item) => (
+                  <article className="contact-record" key={item.id}>
+                    <div className="contact-record-main">
+                      <div className="contact-record-info">
+                        <h4>{item.pet}</h4>
+                        <p className="contact-meta">{item.ownerPhone}</p>
+                        <p className="contact-vaccine">{item.vaccine}</p>
+                      </div>
+                      <div className="contact-record-side">
+                        <span className={'status ' + statusClass(item.status)}>{item.status}</span>
+                        <span className="days-badge upcoming-badge">还有{daysDiff(item.nextDate)}天</span>
+                      </div>
+                    </div>
+                    <div className="contact-actions">
+                      <button className="mark-contact-btn" type="button" onClick={() => updateStatus(item.id, '已联系')}>
+                        <CheckCircle2 size={14} />标记已联系
+                      </button>
+                    </div>
+                  </article>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
       </section>
 
       <section className="workspace">
