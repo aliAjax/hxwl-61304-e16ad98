@@ -1,5 +1,5 @@
 import { useMemo, useState, useRef } from 'react';
-import { Syringe, Plus, Search, Trash2, RotateCcw, CheckCircle2, AlertTriangle, ClipboardList, CalendarDays, PhoneCall, Clock, AlertCircle, CalendarCheck, MessageSquareText, X, User, Calendar, Upload, FileText, AlertOctagon, CheckCheck, Info, Users, PawPrint, ArrowLeft, ChevronRight } from 'lucide-react';
+import { Syringe, Plus, Search, Trash2, RotateCcw, CheckCircle2, AlertTriangle, ClipboardList, CalendarDays, PhoneCall, Clock, AlertCircle, CalendarCheck, MessageSquareText, X, User, Calendar, Upload, FileText, AlertOctagon, CheckCheck, Info, Users, PawPrint, ArrowLeft, ChevronRight, Settings, Save, Edit3 } from 'lucide-react';
 import './App.css';
 
 const appConfig = {
@@ -161,6 +161,42 @@ const appConfig = {
   }
 };
 
+const defaultTemplates = [
+  { id: 'tpl-1', species: '猫', vaccine: '猫三联', days: 365 },
+  { id: 'tpl-2', species: '猫', vaccine: '狂犬', days: 365 },
+  { id: 'tpl-3', species: '犬', vaccine: '狂犬', days: 365 },
+  { id: 'tpl-4', species: '犬', vaccine: '犬六联', days: 365 },
+  { id: 'tpl-5', species: '兔', vaccine: '体内驱虫', days: 90 },
+  { id: 'tpl-6', species: '猫', vaccine: '体内驱虫', days: 90 },
+  { id: 'tpl-7', species: '犬', vaccine: '体内驱虫', days: 90 },
+  { id: 'tpl-8', species: '其他', vaccine: '狂犬', days: 365 },
+  { id: 'tpl-9', species: '其他', vaccine: '体内驱虫', days: 90 },
+];
+
+const TEMPLATE_STORAGE_KEY = appConfig.storage + '-templates';
+
+function loadTemplates() {
+  const raw = localStorage.getItem(TEMPLATE_STORAGE_KEY);
+  if (raw) {
+    try { return JSON.parse(raw); } catch { return [...defaultTemplates]; }
+  }
+  return [...defaultTemplates];
+}
+
+function persistTemplates(templates) {
+  localStorage.setItem(TEMPLATE_STORAGE_KEY, JSON.stringify(templates));
+}
+
+function calcNextDate(lastDate, species, vaccine, templates) {
+  if (!lastDate) return '';
+  const tpl = templates.find(t => t.species === species && t.vaccine === vaccine);
+  if (!tpl) return '';
+  const d = new Date(lastDate);
+  if (isNaN(d.getTime())) return '';
+  d.setDate(d.getDate() + tpl.days);
+  return d.toISOString().slice(0, 10);
+}
+
 const today = new Date().toISOString().slice(0, 10);
 
 function uid() {
@@ -266,10 +302,67 @@ function App() {
   const [currentView, setCurrentView] = useState('records');
   const [ownerSearch, setOwnerSearch] = useState('');
   const [selectedOwner, setSelectedOwner] = useState(null);
+  const [templates, setTemplates] = useState(loadTemplates);
+  const [editingTemplate, setEditingTemplate] = useState(null);
+  const [templateForm, setTemplateForm] = useState({ species: '', vaccine: '', days: '' });
 
   function persist(next) {
     setRecords(next);
     localStorage.setItem(appConfig.storage, JSON.stringify(next));
+  }
+
+  function saveTemplates(next) {
+    setTemplates(next);
+    persistTemplates(next);
+  }
+
+  function addTemplate(e) {
+    e.preventDefault();
+    const { species, vaccine, days } = templateForm;
+    if (!species || !vaccine || !days || Number(days) <= 0) return;
+    const existing = templates.find(t => t.species === species && t.vaccine === vaccine);
+    if (existing) {
+      const next = templates.map(t => t.id === existing.id ? { ...t, days: Number(days) } : t);
+      saveTemplates(next);
+    } else {
+      const next = [...templates, { id: uid(), species, vaccine, days: Number(days) }];
+      saveTemplates(next);
+    }
+    setTemplateForm({ species: '', vaccine: '', days: '' });
+    setEditingTemplate(null);
+  }
+
+  function removeTemplate(id) {
+    saveTemplates(templates.filter(t => t.id !== id));
+  }
+
+  function restoreDefaultTemplates() {
+    saveTemplates([...defaultTemplates]);
+    setEditingTemplate(null);
+    setTemplateForm({ species: '', vaccine: '', days: '' });
+  }
+
+  function startEditTemplate(tpl) {
+    setEditingTemplate(tpl.id);
+    setTemplateForm({ species: tpl.species, vaccine: tpl.vaccine, days: String(tpl.days) });
+  }
+
+  function cancelEditTemplate() {
+    setEditingTemplate(null);
+    setTemplateForm({ species: '', vaccine: '', days: '' });
+  }
+
+  function repairRecords() {
+    const next = records.map(item => {
+      if (item.nextDate && item.lastDate) return item;
+      if (!item.lastDate) return item;
+      const autoNext = calcNextDate(item.lastDate, item.species, item.vaccine, templates);
+      if (!autoNext) return item;
+      return { ...item, nextDate: autoNext };
+    });
+    persist(next);
+    const count = next.filter((r, i) => r.nextDate !== records[i].nextDate).length;
+    alert(`已修复 ${count} 条记录的下次提醒日期`);
   }
 
   function addRecord(event) {
@@ -779,6 +872,13 @@ function App() {
           <Users size={16} />
           主人档案
         </button>
+        <button
+          className={`view-tab ${currentView === 'templates' ? 'active' : ''}`}
+          onClick={() => { setCurrentView('templates'); setSelected(null); setSelectedOwner(null); }}
+        >
+          <Settings size={16} />
+          复种周期模板
+        </button>
       </div>
 
       <section className="metrics">
@@ -1136,6 +1236,101 @@ function App() {
         </section>
       )}
 
+      {currentView === 'templates' && (
+        <section className="template-section">
+          <div className="template-layout">
+            <div className="panel template-form-panel">
+              <div className="panel-title">
+                <Settings size={18} />
+                <h2>复种周期模板</h2>
+              </div>
+              <p className="hint">为不同物种和疫苗类型配置默认复种周期（天数），新增记录选择疫苗后将自动计算下次提醒日期。</p>
+              <form className="template-form" onSubmit={addTemplate}>
+                <label>
+                  <span>物种</span>
+                  <select value={templateForm.species} onChange={(e) => setTemplateForm({ ...templateForm, species: e.target.value })}>
+                    <option value="">选择物种</option>
+                    {appConfig.fields.find(f => f.key === 'species').options.map((o) => <option key={o}>{o}</option>)}
+                  </select>
+                </label>
+                <label>
+                  <span>疫苗类型</span>
+                  <select value={templateForm.vaccine} onChange={(e) => setTemplateForm({ ...templateForm, vaccine: e.target.value })}>
+                    <option value="">选择疫苗</option>
+                    {appConfig.fields.find(f => f.key === 'vaccine').options.map((o) => <option key={o}>{o}</option>)}
+                  </select>
+                </label>
+                <label>
+                  <span>复种周期（天）</span>
+                  <input type="number" min="1" value={templateForm.days} onChange={(e) => setTemplateForm({ ...templateForm, days: e.target.value })} placeholder="365" />
+                </label>
+                <div className="template-form-actions">
+                  <button className="primary" type="submit" disabled={!templateForm.species || !templateForm.vaccine || !templateForm.days || Number(templateForm.days) <= 0}>
+                    <Save size={16} />
+                    {editingTemplate ? '保存修改' : '添加模板'}
+                  </button>
+                  {editingTemplate && (
+                    <button type="button" className="btn-secondary" onClick={cancelEditTemplate}>取消</button>
+                  )}
+                </div>
+              </form>
+              <div className="template-restore">
+                <button type="button" className="restore-btn" onClick={restoreDefaultTemplates}>
+                  <RotateCcw size={14} />
+                  恢复默认模板
+                </button>
+              </div>
+            </div>
+
+            <div className="panel template-list-panel">
+              <div className="panel-title">
+                <ClipboardList size={18} />
+                <h2>模板列表</h2>
+                <span className="template-count">{templates.length}</span>
+              </div>
+              <div className="template-list">
+                {templates.length === 0 ? (
+                  <p className="empty-group">暂无模板，请添加</p>
+                ) : (
+                  templates.map((tpl) => (
+                    <article className="template-item" key={tpl.id}>
+                      <div className="template-item-main">
+                        <div className="template-item-info">
+                          <span className="template-species">{tpl.species}</span>
+                          <span className="template-arrow">→</span>
+                          <span className="template-vaccine">{tpl.vaccine}</span>
+                        </div>
+                        <span className="template-days">{tpl.days}天</span>
+                      </div>
+                      <div className="template-item-actions">
+                        <button type="button" onClick={() => startEditTemplate(tpl)} title="编辑">
+                          <Edit3 size={14} />
+                        </button>
+                        <button type="button" className="ghost-danger" onClick={() => removeTemplate(tpl.id)} title="删除">
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </article>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="panel template-repair-panel">
+            <div className="panel-title">
+              <AlertCircle size={18} />
+              <h2>记录修复</h2>
+            </div>
+            <p className="hint">对于已有记录中缺少下次提醒日期的条目，根据当前模板配置自动补充计算结果。已有下次提醒日期的记录不会被修改。</p>
+            <button type="button" className="repair-btn" onClick={repairRecords}>
+              <CheckCircle2 size={16} />
+              修复缺失的提醒日期
+            </button>
+          </div>
+        </section>
+      )}
+
       {currentView === 'records' && (
         <>
           <section className="workspace">
@@ -1145,20 +1340,59 @@ function App() {
                 <h2>新增记录</h2>
               </div>
               <div className="form-grid">
-                {appConfig.fields.map((field) => (
-                  <label key={field.key} className={field.type === 'textarea' ? 'wide' : ''}>
-                    <span>{field.label}</span>
-                    {field.type === 'textarea' ? (
-                      <textarea value={form[field.key] || ''} onChange={(event) => setForm({ ...form, [field.key]: event.target.value })} placeholder={field.placeholder} />
-                    ) : field.type === 'select' ? (
-                      <select value={form[field.key] || ''} onChange={(event) => setForm({ ...form, [field.key]: event.target.value })}>
-                        {field.options.map((option) => <option key={option}>{option}</option>)}
-                      </select>
-                    ) : (
-                      <input type={field.type} value={form[field.key] || ''} onChange={(event) => setForm({ ...form, [field.key]: event.target.value })} placeholder={field.placeholder} />
-                    )}
-                  </label>
-                ))}
+                {appConfig.fields.map((field) => {
+                  const isAutoField = field.key === 'nextDate';
+                  const autoNext = calcNextDate(form.lastDate, form.species, form.vaccine, templates);
+                  const isAutoCalculated = isAutoField && autoNext && form.nextDate === autoNext;
+                  return (
+                    <label key={field.key} className={field.type === 'textarea' ? 'wide' : ''}>
+                      <span>
+                        {field.label}
+                        {isAutoField && isAutoCalculated && <span className="auto-badge">自动生成</span>}
+                      </span>
+                      {field.type === 'textarea' ? (
+                        <textarea value={form[field.key] || ''} onChange={(event) => setForm({ ...form, [field.key]: event.target.value })} placeholder={field.placeholder} />
+                      ) : field.type === 'select' ? (
+                        <select value={form[field.key] || ''} onChange={(event) => {
+                          const next = { ...form, [field.key]: event.target.value };
+                          const newAutoNext = calcNextDate(
+                            field.key === 'species' ? next.lastDate : form.lastDate,
+                            field.key === 'species' ? event.target.value : form.species,
+                            field.key === 'vaccine' ? event.target.value : form.vaccine,
+                            templates
+                          );
+                          if (newAutoNext && (field.key === 'species' || field.key === 'vaccine')) {
+                            next.nextDate = newAutoNext;
+                          }
+                          setForm(next);
+                        }}>
+                          {field.options.map((option) => <option key={option}>{option}</option>)}
+                        </select>
+                      ) : (
+                        <input
+                          type={field.type}
+                          value={form[field.key] || ''}
+                          onChange={(event) => {
+                            const next = { ...form, [field.key]: event.target.value };
+                            if (field.key === 'lastDate') {
+                              const newAutoNext = calcNextDate(event.target.value, form.species, form.vaccine, templates);
+                              if (newAutoNext) {
+                                next.nextDate = newAutoNext;
+                              }
+                            }
+                            setForm(next);
+                          }}
+                          placeholder={field.placeholder}
+                        />
+                      )}
+                      {isAutoField && (
+                        <span className="field-hint">
+                          {autoNext ? `模板建议：${autoNext}` : '无匹配模板，请手动填写'}
+                        </span>
+                      )}
+                    </label>
+                  );
+                })}
                 <label>
                   <span>当前状态</span>
                   <select value={form.status || appConfig.primaryStatus} onChange={(event) => setForm({ ...form, status: event.target.value })}>
