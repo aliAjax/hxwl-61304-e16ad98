@@ -1,13 +1,6 @@
 import { useMemo, useState } from 'react';
-import { Syringe, Plus, Search, Trash2, RotateCcw, CheckCircle2, AlertTriangle, ClipboardList, CalendarDays, PhoneCall, Clock, AlertCircle, CalendarCheck, Calculator, ArrowRight, MessageSquareText, X, User, Calendar } from 'lucide-react';
+import { Syringe, Plus, Search, Trash2, RotateCcw, CheckCircle2, AlertTriangle, ClipboardList, CalendarDays, PhoneCall, Clock, AlertCircle, CalendarCheck, MessageSquareText, X, User, Calendar } from 'lucide-react';
 import './App.css';
-
-const vaccineIntervalRules = {
-  "猫三联": { days: 365, species: ["猫"], description: "每年接种一次" },
-  "狂犬": { days: 365, species: ["猫", "犬"], description: "每年接种一次" },
-  "犬六联": { days: 365, species: ["犬"], description: "每年接种一次" },
-  "体内驱虫": { days: 90, species: ["猫", "犬", "兔", "其他"], description: "每3个月一次" }
-};
 
 const appConfig = {
   "id": "hxwl-61304",
@@ -235,21 +228,6 @@ function daysDiff(dateText) {
   return Math.round((date.getTime() - now.getTime()) / 86400000);
 }
 
-function calculateNextVaccineDate(lastDate, vaccineType) {
-  if (!lastDate || !vaccineType) return null;
-  const rule = vaccineIntervalRules[vaccineType];
-  if (!rule) return null;
-  const date = new Date(lastDate);
-  date.setDate(date.getDate() + rule.days);
-  return date.toISOString().slice(0, 10);
-}
-
-function getAvailableVaccinesForSpecies(species) {
-  return Object.entries(vaccineIntervalRules)
-    .filter(([_, rule]) => rule.species.includes(species))
-    .map(([vaccine]) => vaccine);
-}
-
 function latestTemp(item) {
   const temps = item.temps || [Number(item.temperature)];
   return temps[temps.length - 1];
@@ -279,11 +257,6 @@ function App() {
   const [form, setForm] = useState(appConfig.defaultValues);
   const [filters, setFilters] = useState({ query: '', status: '全部' });
   const [selected, setSelected] = useState(null);
-  const [calculator, setCalculator] = useState({
-    species: '猫',
-    vaccine: '猫三联',
-    lastDate: ''
-  });
   const [newNoteContent, setNewNoteContent] = useState('');
   const [newNoteOperator, setNewNoteOperator] = useState('');
 
@@ -382,38 +355,6 @@ function App() {
     } : record);
     persist(next);
     setSelected(next.find((record) => record.id === item.id));
-  }
-
-  const calculatorResult = useMemo(() => {
-    if (!calculator.lastDate || !calculator.vaccine) return null;
-    const nextDate = calculateNextVaccineDate(calculator.lastDate, calculator.vaccine);
-    const rule = vaccineIntervalRules[calculator.vaccine];
-    if (!nextDate || !rule) return null;
-    const daysUntil = daysDiff(nextDate);
-    return {
-      nextDate,
-      intervalDays: rule.days,
-      description: rule.description,
-      daysUntil,
-      isOverdue: daysUntil < 0,
-      isToday: daysUntil === 0,
-      isUpcoming: daysUntil > 0 && daysUntil <= 7
-    };
-  }, [calculator]);
-
-  const availableVaccines = useMemo(() => {
-    return getAvailableVaccinesForSpecies(calculator.species);
-  }, [calculator.species]);
-
-  function fillCalculatorToForm() {
-    if (!calculatorResult) return;
-    setForm({
-      ...form,
-      species: calculator.species,
-      vaccine: calculator.vaccine,
-      lastDate: calculator.lastDate,
-      nextDate: calculatorResult.nextDate
-    });
   }
 
   const filteredRecords = useMemo(() => {
@@ -620,99 +561,6 @@ function App() {
                 ))
               )}
             </div>
-          </div>
-        </div>
-      </section>
-
-      <section className="panel calculator-panel">
-        <div className="panel-title">
-          <Calculator size={18} />
-          <h2>疫苗到期日计算器</h2>
-          <span className="calculator-badge">快捷计算</span>
-        </div>
-        <div className="calculator-content">
-          <div className="calculator-form">
-            <div className="calculator-form-grid">
-              <label>
-                <span>物种</span>
-                <select
-                  value={calculator.species}
-                  onChange={(event) => {
-                    const newSpecies = event.target.value;
-                    const vaccines = getAvailableVaccinesForSpecies(newSpecies);
-                    setCalculator({
-                      ...calculator,
-                      species: newSpecies,
-                      vaccine: vaccines[0] || ''
-                    });
-                  }}
-                >
-                  {appConfig.fields.find(f => f.key === 'species').options.map((option) => (
-                    <option key={option}>{option}</option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                <span>疫苗类型</span>
-                <select
-                  value={calculator.vaccine}
-                  onChange={(event) => setCalculator({ ...calculator, vaccine: event.target.value })}
-                >
-                  {availableVaccines.map((option) => (
-                    <option key={option}>{option}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="calculator-date-label">
-                <span>上次接种日期</span>
-                <input
-                  type="date"
-                  value={calculator.lastDate}
-                  max={today}
-                  onChange={(event) => setCalculator({ ...calculator, lastDate: event.target.value })}
-                />
-              </label>
-            </div>
-          </div>
-
-          <div className="calculator-arrow">
-            <ArrowRight size={24} className="arrow-icon" />
-          </div>
-
-          <div className="calculator-result">
-            {calculatorResult ? (
-              <div className="result-content">
-                <div className="result-header">
-                  <span className="result-label">建议下次接种日期</span>
-                  <span className={`result-days-badge ${calculatorResult.isOverdue ? 'overdue' : calculatorResult.isToday ? 'today' : calculatorResult.isUpcoming ? 'upcoming' : ''}`}>
-                    {calculatorResult.isOverdue ? `已逾期${Math.abs(calculatorResult.daysUntil)}天` :
-                     calculatorResult.isToday ? '今天到期' :
-                     calculatorResult.isUpcoming ? `还有${calculatorResult.daysUntil}天` :
-                     `${calculatorResult.daysUntil}天后`}
-                  </span>
-                </div>
-                <div className="result-date">
-                  <CalendarDays size={28} className="result-date-icon" />
-                  <span className="result-date-text">{calculatorResult.nextDate}</span>
-                </div>
-                <div className="result-meta">
-                  <span className="result-interval">间隔 {calculatorResult.intervalDays} 天 · {calculatorResult.description}</span>
-                </div>
-                <button
-                  className="fill-form-btn"
-                  type="button"
-                  onClick={fillCalculatorToForm}
-                >
-                  <Plus size={16} />
-                  一键填入新增表单
-                </button>
-              </div>
-            ) : (
-              <div className="result-placeholder">
-                <Calculator size={36} className="placeholder-icon" />
-                <p>选择物种、疫苗类型和上次接种日期<br />自动计算下次提醒日期</p>
-              </div>
-            )}
           </div>
         </div>
       </section>
