@@ -2539,7 +2539,7 @@ textarea { min-height: 76px; resize: vertical; }
 
 .error-message {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
   padding: 12px;
   background: #fef2f2;
@@ -2548,6 +2548,20 @@ textarea { min-height: 76px; resize: vertical; }
   color: #b91c1c;
   font-size: 14px;
   font-weight: 600;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.error-message svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.error-message span {
+  flex: 1;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .restore-file-info {

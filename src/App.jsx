@@ -787,47 +787,151 @@ function App() {
     URL.revokeObjectURL(url);
   }
 
+  const EXPECTED_FORMAT_SAMPLE = [
+    '{',
+    '  "version": 1,',
+    '  "appId": "hxwl-61304",',
+    '  "records": [',
+    '    {',
+    '      "pet": "宠物姓名（必填）",',
+    '      "ownerPhone": "13800008888（必填）",',
+    '      "vaccine": "猫三联（必填）",',
+    '      "nextDate": "2026-12-31（必填）",',
+    '      "species": "猫（可选）",',
+    '      "lastDate": "2025-12-31（可选）",',
+    '      "status": "待联系（可选）"',
+    '    }',
+    '  ]',
+    '}'
+  ].join('\n');
+
+  function getExpectedFormatHint(prefix) {
+    return `${prefix}\n\n📋 正确格式示例：\n${EXPECTED_FORMAT_SAMPLE}`;
+  }
+
+  function buildValidationResult({ valid = true, errors = [], warnings = [], validRecords = [], invalidRecords = [], allWarnings = [], migratedCount = 0, totalRecords = 0 }) {
+    return {
+      valid,
+      errors: [...errors],
+      warnings: [...warnings],
+      validRecords: [...validRecords],
+      invalidRecords: [...invalidRecords],
+      allWarnings: [...allWarnings],
+      migratedCount,
+      totalRecords: totalRecords || validRecords.length + invalidRecords.length,
+      validCount: validRecords.length,
+      invalidCount: invalidRecords.length
+    };
+  }
+
   function validateRestoreData(data) {
     const errors = [];
     const warnings = [];
+    const validRecords = [];
+    const invalidRecords = [];
+    const recordWarnings = [];
     let recordsToProcess = [];
+    let migratedCount = 0;
 
-    if (!data || typeof data !== 'object') {
-      errors.push('文件格式错误：不是有效的JSON对象');
-      return { valid: false, errors, warnings, records: [] };
+    if (data === null || data === undefined) {
+      errors.push(getExpectedFormatHint('❌ 文件内容为空：JSON解析结果为 null/undefined'));
+      return buildValidationResult({
+        valid: false,
+        errors,
+        warnings,
+        validRecords: [],
+        invalidRecords: [],
+        allWarnings: [],
+        migratedCount: 0,
+        totalRecords: 0
+      });
     }
 
-    if (data.records && Array.isArray(data.records)) {
-      recordsToProcess = data.records;
-      if (data.appId && data.appId !== appConfig.id) {
-        warnings.push(`备份文件来自不同应用(${data.appId})，可能存在字段不兼容`);
-      }
-      if (data.version && data.version > 1) {
-        warnings.push(`备份文件版本(${data.version})高于当前版本，部分字段可能无法识别`);
+    if (typeof data !== 'object') {
+      errors.push(getExpectedFormatHint(`❌ 文件格式错误：JSON顶层应为对象或数组，实际为「${typeof data}」类型`));
+      return buildValidationResult({
+        valid: false,
+        errors,
+        warnings,
+        validRecords: [],
+        invalidRecords: [],
+        allWarnings: [],
+        migratedCount: 0,
+        totalRecords: 0
+      });
+    }
+
+    if (data.records !== undefined && data.records !== null) {
+      if (Array.isArray(data.records)) {
+        recordsToProcess = data.records;
+        if (data.appId && data.appId !== appConfig.id) {
+          warnings.push(`⚠️ 备份文件来自不同应用(${data.appId})，可能存在字段不兼容`);
+        }
+        if (data.version && data.version > 1) {
+          warnings.push(`⚠️ 备份文件版本(v${data.version})高于当前版本，部分字段可能无法识别`);
+        }
+      } else {
+        const valPreview = JSON.stringify(data.records).slice(0, 60);
+        errors.push(getExpectedFormatHint(`❌ 数据格式错误：records字段应为数组，实际为「${typeof data.records}」${valPreview ? `（值：${valPreview}...）` : ''}`));
+        return buildValidationResult({
+          valid: false,
+          errors,
+          warnings,
+          validRecords: [],
+          invalidRecords: [],
+          allWarnings: [...warnings],
+          migratedCount: 0,
+          totalRecords: 0
+        });
       }
     } else if (Array.isArray(data)) {
       recordsToProcess = data;
-      warnings.push('备份文件为旧版本格式（直接数组），正在自动转换');
+      warnings.push('ℹ️ 备份文件为旧版本格式（直接数组），正在自动转换');
     } else {
-      errors.push('文件格式错误：未找到记录数据');
-      return { valid: false, errors, warnings, records: [] };
+      const keys = Object.keys(data);
+      const keysInfo = keys.length > 0
+        ? `发现顶层字段：${keys.map(k => `「${k}」`).join('、')}`
+        : 'JSON对象为空';
+      errors.push(getExpectedFormatHint(`❌ 文件结构错误：未找到 records 字段且不是数组格式（${keysInfo}）`));
+      return buildValidationResult({
+        valid: false,
+        errors,
+        warnings,
+        validRecords: [],
+        invalidRecords: [],
+        allWarnings: [...warnings],
+        migratedCount: 0,
+        totalRecords: 0
+      });
+    }
+
+    if (!Array.isArray(recordsToProcess)) {
+      errors.push(getExpectedFormatHint(`❌ 数据格式错误：记录列表应为数组类型，实际为「${typeof recordsToProcess}」`));
+      return buildValidationResult({
+        valid: false,
+        errors,
+        warnings,
+        validRecords: [],
+        invalidRecords: [],
+        allWarnings: [...warnings],
+        migratedCount: 0,
+        totalRecords: 0
+      });
     }
 
     if (recordsToProcess.length === 0) {
-      warnings.push('备份文件中没有记录');
+      warnings.push('⚠️ 备份文件中没有记录');
     }
 
     const requiredFields = ['pet', 'ownerPhone', 'vaccine', 'nextDate'];
-    const validRecords = [];
-    const invalidRecords = [];
-    let migratedCount = 0;
+    const validatedWithWarnings = [];
 
     recordsToProcess.forEach((record, index) => {
       const recordErrors = [];
-      const recordWarnings = [];
+      const perRecordWarnings = [];
 
       if (!record || typeof record !== 'object') {
-        invalidRecords.push({ index, error: '不是有效的对象' });
+        invalidRecords.push({ index, errors: ['不是有效的对象'], warnings: [], record });
         return;
       }
 
@@ -847,7 +951,7 @@ function App() {
       }
 
       if (record.lastDate && !isValidDate(record.lastDate)) {
-        recordWarnings.push(`上次接种日期格式不正确，将忽略：${record.lastDate}`);
+        perRecordWarnings.push(`上次接种日期格式不正确，将忽略：${record.lastDate}`);
       }
 
       const migratedRecord = { ...record };
@@ -883,8 +987,11 @@ function App() {
       }
 
       if (migratedRecord.nextDate && isValidDate(migratedRecord.nextDate)) {
-        migratedRecord.nextDate = normalizeDate(migratedRecord.nextDate);
-        if (migratedRecord.nextDate !== record.nextDate) needsMigration = true;
+        const normalizedNext = normalizeDate(migratedRecord.nextDate);
+        if (normalizedNext !== record.nextDate) {
+          migratedRecord.nextDate = normalizedNext;
+          needsMigration = true;
+        }
       }
 
       if (migratedRecord.ownerPhone) {
@@ -898,31 +1005,38 @@ function App() {
       if (needsMigration) migratedCount++;
 
       if (recordErrors.length > 0) {
-        invalidRecords.push({ index, errors: recordErrors, warnings: recordWarnings, record });
+        invalidRecords.push({ index, errors: recordErrors, warnings: perRecordWarnings, record });
       } else {
-        validRecords.push({ record: migratedRecord, warnings: recordWarnings });
+        validatedWithWarnings.push({ record: migratedRecord, warnings: perRecordWarnings });
+        validRecords.push(migratedRecord);
       }
     });
 
     if (migratedCount > 0) {
-      warnings.push(`已自动迁移 ${migratedCount} 条旧版本记录（补充timeline等字段）`);
+      warnings.push(`✅ 已自动迁移 ${migratedCount} 条旧版本记录（补充timeline等字段）`);
     }
 
     if (invalidRecords.length > 0) {
-      errors.push(`${invalidRecords.length} 条记录存在错误，将被跳过`);
+      errors.push(`⚠️ ${invalidRecords.length} 条记录存在错误，将被跳过（可查看下方详细列表）`);
     }
 
-    return {
-      valid: errors.filter(e => !e.includes('条记录存在错误')).length === 0,
+    const allWarningsList = [
+      ...warnings,
+      ...validatedWithWarnings.flatMap((v, i) => v.warnings.map(w => `记录${i + 1}：${w}`))
+    ];
+
+    const hasFatalErrors = errors.some(e => !e.includes('条记录存在错误'));
+
+    return buildValidationResult({
+      valid: !hasFatalErrors,
       errors,
       warnings,
-      validRecords: validRecords.map(v => v.record),
+      validRecords,
       invalidRecords,
-      allWarnings: [
-        ...warnings,
-        ...validRecords.flatMap((v, i) => v.warnings.map(w => `记录${i + 1}：${w}`))
-      ]
-    };
+      allWarnings: allWarningsList,
+      migratedCount,
+      totalRecords: recordsToProcess.length
+    });
   }
 
   function calculateRestoreChanges(validRecords) {
@@ -999,7 +1113,11 @@ function App() {
         try {
           data = JSON.parse(text);
         } catch (parseError) {
-          setRestoreError({ type: 'format', message: 'JSON解析失败，请检查文件格式是否正确' });
+          const parseHint = getExpectedFormatHint(
+            `❌ JSON解析失败：文件内容不是有效的JSON格式\\n` +
+            `错误详情：${parseError instanceof Error ? parseError.message.replace(/^JSON\.parse: /, '') : String(parseError)}`
+          );
+          setRestoreError({ type: 'format', message: parseHint });
           return;
         }
 
@@ -1008,7 +1126,7 @@ function App() {
         if (!validation.valid && validation.validRecords.length === 0) {
           setRestoreError({
             type: 'validation',
-            message: validation.errors.join('；'),
+            message: validation.errors.join('\n\n'),
             details: validation
           });
           return;
@@ -2547,32 +2665,32 @@ function App() {
                   </div>
                 </div>
 
-                {restorePreview.validation.warnings.length > 0 && (
+                {restorePreview && restorePreview.validation && (restorePreview.validation.allWarnings || []).length > 0 && (
                   <div className="warnings-section">
                     <h3><AlertTriangle size={16} className="warning-icon" />警告</h3>
                     <ul className="warnings-list">
-                      {restorePreview.validation.allWarnings.slice(0, 10).map((warning, i) => (
+                      {(restorePreview.validation.allWarnings || []).slice(0, 10).map((warning, i) => (
                         <li key={i}>{warning}</li>
                       ))}
-                      {restorePreview.validation.allWarnings.length > 10 && (
-                        <li>... 还有 {restorePreview.validation.allWarnings.length - 10} 条警告</li>
+                      {(restorePreview.validation.allWarnings || []).length > 10 && (
+                        <li>... 还有 {(restorePreview.validation.allWarnings || []).length - 10} 条警告</li>
                       )}
                     </ul>
                   </div>
                 )}
 
-                {restorePreview.validation.invalidRecords.length > 0 && (
+                {restorePreview && restorePreview.validation && (restorePreview.validation.invalidRecords || []).length > 0 && (
                   <div className="errors-section">
-                    <h3><AlertOctagon size={16} className="error-icon" />无效记录（{restorePreview.validation.invalidRecords.length} 条）</h3>
+                    <h3><AlertOctagon size={16} className="error-icon" />无效记录（{(restorePreview.validation.invalidRecords || []).length} 条）</h3>
                     <div className="invalid-records-list">
-                      {restorePreview.validation.invalidRecords.slice(0, 5).map((item, i) => (
+                      {(restorePreview.validation.invalidRecords || []).slice(0, 5).map((item, i) => (
                         <div key={i} className="invalid-record-item">
                           <span className="record-index">第 {item.index + 1} 条：</span>
-                          <span className="record-error">{item.errors.join('；')}</span>
+                          <span className="record-error">{(item.errors || []).join('；')}</span>
                         </div>
                       ))}
-                      {restorePreview.validation.invalidRecords.length > 5 && (
-                        <p className="more-errors">... 还有 {restorePreview.validation.invalidRecords.length - 5} 条无效记录</p>
+                      {(restorePreview.validation.invalidRecords || []).length > 5 && (
+                        <p className="more-errors">... 还有 {(restorePreview.validation.invalidRecords || []).length - 5} 条无效记录</p>
                       )}
                     </div>
                   </div>
