@@ -667,15 +667,19 @@ function validateImportStoreData(rawData) {
 
   if (!rawData || typeof rawData !== 'object') {
     errors.push('文件格式错误：不是有效的JSON对象');
-    return { valid: false, errors, warnings, data: null };
+    return { valid: false, errors, warnings, data: null, modules: null };
   }
 
   let storeData = null;
+  let sourceData = null;
+  let isLegacyFormat = false;
 
   if (rawData.data && typeof rawData.data === 'object') {
     storeData = rawData.data;
+    sourceData = rawData.data;
   } else if (rawData.records !== undefined || rawData.templates !== undefined) {
     storeData = rawData;
+    sourceData = rawData;
   } else if (rawData.appId && rawData.records !== undefined) {
     storeData = {
       records: rawData.records,
@@ -684,18 +688,29 @@ function validateImportStoreData(rawData) {
       filters: { query: '', status: '全部', species: '全部', vaccine: '全部' },
       groupMode: 'auto'
     };
+    sourceData = rawData;
+    isLegacyFormat = true;
     warnings.push('检测到旧版数据格式，已自动转换为门店数据');
   }
 
   if (!storeData) {
     errors.push('未找到有效的门店数据');
-    return { valid: false, errors, warnings, data: null };
+    return { valid: false, errors, warnings, data: null, modules: null };
   }
 
   if (!Array.isArray(storeData.records)) {
     errors.push('数据格式错误：records字段应为数组');
-    return { valid: false, errors, warnings, data: null };
+    return { valid: false, errors, warnings, data: null, modules: null };
   }
+
+  const modules = {
+    records: true,
+    templates: !isLegacyFormat && sourceData && Array.isArray(sourceData.templates) && sourceData.templates.length > 0,
+    rules: !isLegacyFormat && sourceData && Array.isArray(sourceData.rules) && sourceData.rules.length > 0,
+    filters: !isLegacyFormat && sourceData && sourceData.filters !== undefined && sourceData.filters !== null,
+    groupMode: !isLegacyFormat && sourceData && sourceData.groupMode !== undefined && sourceData.groupMode !== null,
+    isLegacyFormat: isLegacyFormat
+  };
 
   const normalizedRecords = storeData.records.map(r => {
     const { record: migrated } = migrateRecord(r || {});
@@ -712,7 +727,7 @@ function validateImportStoreData(rawData) {
     schemaVersion: STORE_SCHEMA_VERSION
   };
 
-  return { valid: true, errors, warnings, data: result };
+  return { valid: true, errors, warnings, data: result, modules };
 }
 
 function importStoreData(storeId, importData) {
@@ -892,6 +907,11 @@ function App() {
   const [storeImportFile, setStoreImportFile] = useState(null);
   const storeImportFileRef = useRef(null);
   const [storeImportTargetId, setStoreImportTargetId] = useState('');
+  const [importRestoreRecords, setImportRestoreRecords] = useState(true);
+  const [importRestoreTemplates, setImportRestoreTemplates] = useState(false);
+  const [importRestoreRules, setImportRestoreRules] = useState(false);
+  const [importRestoreFilters, setImportRestoreFilters] = useState(false);
+  const [importRestoreGroupMode, setImportRestoreGroupMode] = useState(false);
   const [selectedContactIds, setSelectedContactIds] = useState(new Set());
   const [showBatchContactModal, setShowBatchContactModal] = useState(false);
   const [batchContactOperator, setBatchContactOperator] = useState('');
@@ -1085,8 +1105,16 @@ function App() {
           recordCount: validation.data?.records?.length || 0,
           templateCount: validation.data?.templates?.length || 0,
           ruleCount: validation.data?.rules?.length || 0,
+          modules: validation.modules,
           rawData: data
         });
+        if (validation.valid && validation.modules) {
+          setImportRestoreRecords(true);
+          setImportRestoreTemplates(validation.modules.templates);
+          setImportRestoreRules(validation.modules.rules);
+          setImportRestoreFilters(validation.modules.filters);
+          setImportRestoreGroupMode(validation.modules.groupMode);
+        }
       } catch (error) {
         setStoreImportPreview({
           fileName: file.name,
@@ -1096,8 +1124,14 @@ function App() {
           recordCount: 0,
           templateCount: 0,
           ruleCount: 0,
+          modules: null,
           rawData: null
         });
+        setImportRestoreRecords(true);
+        setImportRestoreTemplates(false);
+        setImportRestoreRules(false);
+        setImportRestoreFilters(false);
+        setImportRestoreGroupMode(false);
       }
     };
     reader.readAsText(file, 'UTF-8');
@@ -1105,19 +1139,61 @@ function App() {
 
   function handleConfirmStoreImport() {
     if (!storeImportPreview || !storeImportPreview.valid || !storeImportTargetId) return;
+    if (!importRestoreRecords && !importRestoreTemplates && !importRestoreRules && !importRestoreFilters && !importRestoreGroupMode) {
+      alert('请至少选择一个要恢复的模块');
+      return;
+    }
 
-    const { valid, data } = validateImportStoreData(storeImportPreview.rawData);
+    const { valid, data, modules } = validateImportStoreData(storeImportPreview.rawData);
     if (!valid || !data) return;
 
-    persistStoreData(storeImportTargetId, data);
+    const isLegacy = modules?.isLegacyFormat;
+
+    const existingData = loadStoreData(storeImportTargetId) || createDefaultStoreData();
+
+    const mergedData = {
+      ...existingData,
+      schemaVersion: STORE_SCHEMA_VERSION
+    };
+
+    if (importRestoreRecords) {
+      mergedData.records = data.records || [];
+    }
+    if (!isLegacy) {
+      if (importRestoreTemplates) {
+        mergedData.templates = data.templates || [...defaultTemplates];
+      }
+      if (importRestoreRules) {
+        mergedData.rules = data.rules || defaultRules.map(r => ({ ...r }));
+      }
+      if (importRestoreFilters) {
+        mergedData.filters = data.filters || { query: '', status: '全部', species: '全部', vaccine: '全部' };
+      }
+      if (importRestoreGroupMode) {
+        mergedData.groupMode = data.groupMode || 'auto';
+      }
+    }
+
+    persistStoreData(storeImportTargetId, mergedData);
 
     if (storeImportTargetId === currentStoreId) {
-      setRecords(data.records || []);
-      setTemplates(data.templates || [...defaultTemplates]);
-      setRules(data.rules || defaultRules.map(r => ({ ...r })));
-      setFilters(normalizeFilters(data.filters));
-      setGroupMode(data.groupMode || 'auto');
-      setOwnerInfo(data.ownerInfo || {});
+      if (importRestoreRecords) {
+        setRecords(mergedData.records || []);
+      }
+      if (!isLegacy) {
+        if (importRestoreTemplates) {
+          setTemplates(mergedData.templates || [...defaultTemplates]);
+        }
+        if (importRestoreRules) {
+          setRules(mergedData.rules || defaultRules.map(r => ({ ...r })));
+        }
+        if (importRestoreFilters) {
+          setFilters(normalizeFilters(mergedData.filters));
+        }
+        if (importRestoreGroupMode) {
+          setGroupMode(mergedData.groupMode || 'auto');
+        }
+      }
       setSelected(null);
       setSelectedOwner(null);
     }
@@ -1126,6 +1202,11 @@ function App() {
     setStoreImportPreview(null);
     setStoreImportFile(null);
     setStoreImportTargetId('');
+    setImportRestoreRecords(true);
+    setImportRestoreTemplates(false);
+    setImportRestoreRules(false);
+    setImportRestoreFilters(false);
+    setImportRestoreGroupMode(false);
     if (storeImportFileRef.current) {
       storeImportFileRef.current.value = '';
     }
@@ -1136,6 +1217,11 @@ function App() {
     setStoreImportPreview(null);
     setStoreImportFile(null);
     setStoreImportTargetId('');
+    setImportRestoreRecords(true);
+    setImportRestoreTemplates(false);
+    setImportRestoreRules(false);
+    setImportRestoreFilters(false);
+    setImportRestoreGroupMode(false);
     if (storeImportFileRef.current) {
       storeImportFileRef.current.value = '';
     }
@@ -4784,13 +4870,13 @@ function App() {
                       value={storeImportTargetId}
                       onChange={(e) => setStoreImportTargetId(e.target.value)}
                     >
-                      <option value="">请选择要覆盖的门店</option>
+                      <option value="">请选择要恢复的门店</option>
                       {stores.map((s) => (
                         <option key={s.id} value={s.id}>{s.name}</option>
                       ))}
                     </select>
                   </label>
-                  <p className="hint">选择目标门店后，导入的数据将覆盖该门店的所有现有数据</p>
+                  <p className="hint">选择目标门店后，可选择需要恢复的模块分别进行恢复</p>
 
                   <div
                     className="import-drop-zone"
@@ -4831,11 +4917,108 @@ function App() {
                       </h4>
                       <p>文件名：{storeImportPreview.fileName}</p>
                       {storeImportPreview.valid && (
-                        <div className="import-stats">
-                          <span>记录数：{storeImportPreview.recordCount}</span>
-                          <span>模板数：{storeImportPreview.templateCount}</span>
-                          <span>规则数：{storeImportPreview.ruleCount}</span>
-                        </div>
+                        <>
+                          <div className="import-stats">
+                            <span>记录数：{storeImportPreview.recordCount}</span>
+                            {storeImportPreview.modules?.templates && <span>模板数：{storeImportPreview.templateCount}</span>}
+                            {storeImportPreview.modules?.rules && <span>规则数：{storeImportPreview.ruleCount}</span>}
+                          </div>
+                          {storeImportPreview.modules?.isLegacyFormat ? (
+                            <div className="import-modules-legacy">
+                              <p className="legacy-hint">⚠️ 旧版备份仅包含记录数据，将按原有逻辑恢复</p>
+                              <label className="module-checkbox disabled">
+                                <input
+                                  type="checkbox"
+                                  checked={importRestoreRecords}
+                                  disabled
+                                />
+                                <span className="module-label">
+                                  <span className="module-name">客户记录</span>
+                                  <span className="module-count">{storeImportPreview.recordCount} 条记录</span>
+                                </span>
+                              </label>
+                            </div>
+                          ) : (
+                            <div className="import-modules">
+                              <p className="modules-title">选择要恢复的模块：</p>
+                              <label className="module-checkbox">
+                                <input
+                                  type="checkbox"
+                                  checked={importRestoreRecords}
+                                  onChange={(e) => setImportRestoreRecords(e.target.checked)}
+                                />
+                                <span className="module-label">
+                                  <span className="module-name">客户记录</span>
+                                  <span className="module-count">{storeImportPreview.recordCount} 条记录</span>
+                                </span>
+                              </label>
+                              <label className={`module-checkbox ${!storeImportPreview.modules?.templates ? 'disabled' : ''}`}>
+                                <input
+                                  type="checkbox"
+                                  checked={storeImportPreview.modules?.templates ? importRestoreTemplates : false}
+                                  disabled={!storeImportPreview.modules?.templates}
+                                  onChange={(e) => setImportRestoreTemplates(e.target.checked)}
+                                />
+                                <span className="module-label">
+                                  <span className="module-name">免疫模板</span>
+                                  <span className="module-count">
+                                    {storeImportPreview.modules?.templates
+                                      ? `${storeImportPreview.templateCount} 个模板（将被覆盖）`
+                                      : '备份中不包含'}
+                                  </span>
+                                </span>
+                              </label>
+                              <label className={`module-checkbox ${!storeImportPreview.modules?.rules ? 'disabled' : ''}`}>
+                                <input
+                                  type="checkbox"
+                                  checked={storeImportPreview.modules?.rules ? importRestoreRules : false}
+                                  disabled={!storeImportPreview.modules?.rules}
+                                  onChange={(e) => setImportRestoreRules(e.target.checked)}
+                                />
+                                <span className="module-label">
+                                  <span className="module-name">提醒规则</span>
+                                  <span className="module-count">
+                                    {storeImportPreview.modules?.rules
+                                      ? `${storeImportPreview.ruleCount} 条规则（将被覆盖）`
+                                      : '备份中不包含'}
+                                  </span>
+                                </span>
+                              </label>
+                              <label className={`module-checkbox ${!storeImportPreview.modules?.filters ? 'disabled' : ''}`}>
+                                <input
+                                  type="checkbox"
+                                  checked={storeImportPreview.modules?.filters ? importRestoreFilters : false}
+                                  disabled={!storeImportPreview.modules?.filters}
+                                  onChange={(e) => setImportRestoreFilters(e.target.checked)}
+                                />
+                                <span className="module-label">
+                                  <span className="module-name">筛选条件</span>
+                                  <span className="module-count">
+                                    {storeImportPreview.modules?.filters
+                                      ? '包含（将被覆盖）'
+                                      : '备份中不包含'}
+                                  </span>
+                                </span>
+                              </label>
+                              <label className={`module-checkbox ${!storeImportPreview.modules?.groupMode ? 'disabled' : ''}`}>
+                                <input
+                                  type="checkbox"
+                                  checked={storeImportPreview.modules?.groupMode ? importRestoreGroupMode : false}
+                                  disabled={!storeImportPreview.modules?.groupMode}
+                                  onChange={(e) => setImportRestoreGroupMode(e.target.checked)}
+                                />
+                                <span className="module-label">
+                                  <span className="module-name">分组模式</span>
+                                  <span className="module-count">
+                                    {storeImportPreview.modules?.groupMode
+                                      ? '包含（将被覆盖）'
+                                      : '备份中不包含'}
+                                  </span>
+                                </span>
+                              </label>
+                            </div>
+                          )}
+                        </>
                       )}
                       {storeImportPreview.errors.length > 0 && (
                         <div className="import-errors">
