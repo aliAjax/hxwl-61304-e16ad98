@@ -1,4 +1,4 @@
-import { useMemo, useState, useRef } from 'react';
+import { useMemo, useState, useRef, useEffect } from 'react';
 import { Syringe, Plus, Search, Trash2, RotateCcw, CheckCircle2, AlertTriangle, ClipboardList, CalendarDays, PhoneCall, Clock, AlertCircle, CalendarCheck, MessageSquareText, X, User, Calendar, Upload, FileText, AlertOctagon, CheckCheck, Info, Users, PawPrint, ArrowLeft, ChevronRight, Settings, Save, Edit3, Zap, Filter, PlusCircle, MinusCircle, Building2, Copy, Download, MoreHorizontal } from 'lucide-react';
 import './App.css';
 
@@ -434,6 +434,7 @@ function createDefaultStoreData() {
     rules: defaultRules.map(r => ({ ...r, overdueLevels: (r.overdueLevels || []).map(ol => ({ ...ol })) })),
     filters: { query: '', status: '全部' },
     groupMode: 'auto',
+    ownerInfo: {},
     schemaVersion: STORE_SCHEMA_VERSION
   };
 }
@@ -485,6 +486,7 @@ function migrateFromSingleStore() {
     rules,
     filters: { query: '', status: '全部' },
     groupMode: 'auto',
+    ownerInfo: {},
     schemaVersion: STORE_SCHEMA_VERSION
   };
 
@@ -567,7 +569,8 @@ function createStore(name, templateStoreId) {
         templates: (storeData.templates || []).map(t => ({ ...t })),
         rules: (storeData.rules || []).map(r => ({ ...r, overdueLevels: (r.overdueLevels || []).map(ol => ({ ...ol })) })),
         filters: { query: '', status: '全部' },
-        groupMode: storeData.groupMode || 'auto'
+        groupMode: storeData.groupMode || 'auto',
+        ownerInfo: storeData.ownerInfo || {}
       };
     } else {
       storeData = createDefaultStoreData();
@@ -705,6 +708,7 @@ function validateImportStoreData(rawData) {
     rules: Array.isArray(storeData.rules) ? storeData.rules : defaultRules.map(r => ({ ...r })),
     filters: storeData.filters || { query: '', status: '全部' },
     groupMode: storeData.groupMode || 'auto',
+    ownerInfo: storeData.ownerInfo || {},
     schemaVersion: STORE_SCHEMA_VERSION
   };
 
@@ -842,6 +846,10 @@ function App() {
   const [currentView, setCurrentView] = useState('records');
   const [ownerSearch, setOwnerSearch] = useState('');
   const [selectedOwner, setSelectedOwner] = useState(null);
+  const [ownerInfo, setOwnerInfo] = useState(initialStoreState.storeData.ownerInfo || {});
+  const [editingOwnerInfo, setEditingOwnerInfo] = useState(false);
+  const [ownerNoteDraft, setOwnerNoteDraft] = useState('');
+  const [ownerPreferredTimeDraft, setOwnerPreferredTimeDraft] = useState('');
   const [templates, setTemplates] = useState(initialStoreState.storeData.templates);
   const [editingTemplate, setEditingTemplate] = useState(null);
   const [templateForm, setTemplateForm] = useState({ species: '', vaccine: '', days: '' });
@@ -886,6 +894,7 @@ function App() {
       rules,
       filters,
       groupMode,
+      ownerInfo,
       ...updates
     };
     persistStoreData(currentStoreId, newData);
@@ -917,6 +926,17 @@ function App() {
     persistStoreData(currentStoreId, { ...currentData, groupMode: next });
   }
 
+  function saveOwnerInfo(next) {
+    setOwnerInfo(next);
+    const currentData = loadStoreData(currentStoreId) || createDefaultStoreData();
+    persistStoreData(currentStoreId, { ...currentData, ownerInfo: next });
+  }
+
+  function handleUpdateOwnerInfo(phone, info) {
+    const next = { ...ownerInfo, [phone]: { ...(ownerInfo[phone] || {}), ...info } };
+    saveOwnerInfo(next);
+  }
+
   function handleSwitchStore(storeId) {
     if (storeId === currentStoreId) return;
 
@@ -930,6 +950,7 @@ function App() {
       setRules(result.storeData.rules || defaultRules.map(r => ({ ...r })));
       setFilters(result.storeData.filters || { query: '', status: '全部' });
       setGroupMode(result.storeData.groupMode || 'auto');
+      setOwnerInfo(result.storeData.ownerInfo || {});
       setSelected(null);
       setSelectedOwner(null);
       setSelectedCalendarDay(null);
@@ -954,6 +975,7 @@ function App() {
       setRules(result.storeData.rules || defaultRules.map(r => ({ ...r })));
       setFilters(result.storeData.filters || { query: '', status: '全部' });
       setGroupMode(result.storeData.groupMode || 'auto');
+      setOwnerInfo(result.storeData.ownerInfo || {});
       setSelected(null);
       setSelectedOwner(null);
       setNewStoreName('');
@@ -1079,6 +1101,7 @@ function App() {
       setRules(data.rules || defaultRules.map(r => ({ ...r })));
       setFilters(data.filters || { query: '', status: '全部' });
       setGroupMode(data.groupMode || 'auto');
+      setOwnerInfo(data.ownerInfo || {});
       setSelected(null);
       setSelectedOwner(null);
     }
@@ -2321,12 +2344,15 @@ function App() {
     records.forEach((record) => {
       const phone = record.ownerPhone || '未知';
       if (!groups[phone]) {
+        const info = ownerInfo[phone] || {};
         groups[phone] = {
           ownerPhone: phone,
           pets: [],
           lastContactTime: null,
           pendingCount: 0,
-          totalCount: 0
+          totalCount: 0,
+          note: info.note || '',
+          preferredContactTime: info.preferredContactTime || ''
         };
       }
       groups[phone].pets.push(record);
@@ -2349,7 +2375,7 @@ function App() {
       if (b.lastContactTime && a.lastContactTime) return b.lastContactTime - a.lastContactTime;
       return b.totalCount - a.totalCount;
     });
-  }, [records]);
+  }, [records, ownerInfo]);
 
   const filteredOwnerProfiles = useMemo(() => {
     if (!ownerSearch.trim()) return ownerProfiles;
@@ -2364,6 +2390,12 @@ function App() {
     if (!selectedOwner) return null;
     return ownerProfiles.find((profile) => profile.ownerPhone === selectedOwner.ownerPhone) || selectedOwner;
   }, [ownerProfiles, selectedOwner]);
+
+  useEffect(() => {
+    setEditingOwnerInfo(false);
+    setOwnerNoteDraft('');
+    setOwnerPreferredTimeDraft('');
+  }, [selectedOwner]);
 
   function jumpToRecord(recordId) {
     const record = records.find((r) => r.id === recordId);
@@ -2839,6 +2871,101 @@ function App() {
                       <p className="empty-text">暂无联系记录</p>
                     )}
                   </div>
+                </div>
+
+                <div className="owner-detail-section">
+                  <div className="section-title">
+                    <MessageSquareText size={16} />
+                    <h3>主人信息</h3>
+                    {!editingOwnerInfo && (
+                      <button
+                        type="button"
+                        className="edit-owner-info-btn"
+                        onClick={() => {
+                          setOwnerNoteDraft(selectedOwnerProfile.note || '');
+                          setOwnerPreferredTimeDraft(selectedOwnerProfile.preferredContactTime || '');
+                          setEditingOwnerInfo(true);
+                        }}
+                      >
+                        <Edit3 size={14} />
+                        编辑
+                      </button>
+                    )}
+                  </div>
+                  {editingOwnerInfo ? (
+                    <div className="owner-info-edit-form">
+                      <div className="form-field">
+                        <label>
+                          <span>主人备注</span>
+                          <textarea
+                            value={ownerNoteDraft}
+                            onChange={(e) => setOwnerNoteDraft(e.target.value)}
+                            placeholder="输入主人备注信息，如：客户偏好、特殊说明等..."
+                            rows={4}
+                          />
+                        </label>
+                      </div>
+                      <div className="form-field">
+                        <label>
+                          <span>首选联系时间</span>
+                          <select
+                            value={ownerPreferredTimeDraft}
+                            onChange={(e) => setOwnerPreferredTimeDraft(e.target.value)}
+                          >
+                            <option value="">请选择</option>
+                            <option value="上午 (9:00-12:00)">上午 (9:00-12:00)</option>
+                            <option value="下午 (14:00-18:00)">下午 (14:00-18:00)</option>
+                            <option value="晚上 (19:00-21:00)">晚上 (19:00-21:00)</option>
+                            <option value="工作日">工作日</option>
+                            <option value="周末">周末</option>
+                            <option value="随时">随时</option>
+                          </select>
+                        </label>
+                      </div>
+                      <div className="form-actions">
+                        <button
+                          type="button"
+                          className="primary"
+                          onClick={() => {
+                            handleUpdateOwnerInfo(selectedOwnerProfile.ownerPhone, {
+                              note: ownerNoteDraft.trim(),
+                              preferredContactTime: ownerPreferredTimeDraft
+                            });
+                            setEditingOwnerInfo(false);
+                          }}
+                        >
+                          <Save size={14} />
+                          保存
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          onClick={() => {
+                            setEditingOwnerInfo(false);
+                            setOwnerNoteDraft('');
+                            setOwnerPreferredTimeDraft('');
+                          }}
+                        >
+                          取消
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="owner-info-display">
+                      <div className="owner-info-item">
+                        <span className="info-label">主人备注</span>
+                        <p className="info-value">
+                          {selectedOwnerProfile.note || <span className="empty-text">暂无备注</span>}
+                        </p>
+                      </div>
+                      <div className="owner-info-item">
+                        <span className="info-label">首选联系时间</span>
+                        <p className="info-value">
+                          {selectedOwnerProfile.preferredContactTime || <span className="empty-text">未设置</span>}
+                        </p>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="owner-detail-section">
