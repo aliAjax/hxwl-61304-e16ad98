@@ -2932,6 +2932,78 @@ textarea { min-height: 76px; resize: vertical; }
   margin-bottom: 12px;
 }
 
+.restore-modules-list,
+.restore-modules-legacy {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.restore-modules-legacy .legacy-hint {
+  background: #fef3c7;
+  color: #92400e;
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  margin: 0 0 8px 0;
+}
+
+.restore-modules-list .module-checkbox,
+.restore-modules-legacy .module-checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid #d1fae5;
+  background: #fff;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all .15s;
+}
+
+.restore-modules-list .module-checkbox:hover:not(.disabled) {
+  border-color: var(--accent);
+  background: #fdf2f8;
+}
+
+.restore-modules-list .module-checkbox.disabled,
+.restore-modules-legacy .module-checkbox.disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  background: #f9fafb;
+  border-color: #e5e7eb;
+}
+
+.restore-modules-list .module-checkbox input[type="checkbox"],
+.restore-modules-legacy .module-checkbox input[type="checkbox"] {
+  margin-top: 3px;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  flex-shrink: 0;
+}
+
+.restore-modules-list .module-label,
+.restore-modules-legacy .module-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+
+.restore-modules-list .module-name,
+.restore-modules-legacy .module-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.restore-modules-list .module-count,
+.restore-modules-legacy .module-count {
+  font-size: 12px;
+  color: #6b7280;
+}
+
 .warnings-section,
 .errors-section,
 .restore-summary,

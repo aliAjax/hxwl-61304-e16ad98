@@ -379,6 +379,7 @@ function withIds(items) {
 const STORES_META_KEY = appConfig.storage + '-stores-meta';
 const STORE_DATA_KEY_PREFIX = appConfig.storage + '-store-';
 const STORE_SCHEMA_VERSION = 1;
+const BACKUP_FORMAT_VERSION = 2;
 
 function getStoreMetaStorageKey() {
   return STORES_META_KEY;
@@ -868,11 +869,11 @@ function App() {
   const [restoreFile, setRestoreFile] = useState(null);
   const [restoreError, setRestoreError] = useState(null);
   const restoreFileInputRef = useRef(null);
-  const [mainRestoreRecords, setMainRestoreRecords] = useState(true);
-  const [mainRestoreTemplates, setMainRestoreTemplates] = useState(false);
-  const [mainRestoreRules, setMainRestoreRules] = useState(false);
-  const [mainRestoreFilters, setMainRestoreFilters] = useState(false);
-  const [mainRestoreGroupMode, setMainRestoreGroupMode] = useState(false);
+  const [restoreRecords, setRestoreRecords] = useState(true);
+  const [restoreTemplates, setRestoreTemplates] = useState(false);
+  const [restoreRules, setRestoreRules] = useState(false);
+  const [restoreFilters, setRestoreFilters] = useState(false);
+  const [restoreGroupMode, setRestoreGroupMode] = useState(false);
   const [currentView, setCurrentView] = useState('records');
   const [ownerSearch, setOwnerSearch] = useState('');
   const [selectedOwner, setSelectedOwner] = useState(null);
@@ -1273,11 +1274,6 @@ function App() {
   function cancelEditTemplate() {
     setEditingTemplate(null);
     setTemplateForm({ species: '', vaccine: '', days: '' });
-  }
-
-  function saveRules(next) {
-    setRules(next);
-    persistRules(next);
   }
 
   function addRule(e) {
@@ -1882,24 +1878,18 @@ function App() {
   }
 
   function exportToJSON() {
-    const storeName = currentStore?.name || '当前门店';
     const exportData = {
-      version: 2,
+      version: BACKUP_FORMAT_VERSION,
       exportedAt: new Date().toISOString(),
       appId: appConfig.id,
       storageKey: appConfig.storage,
-      storeName: storeName,
-      storeId: currentStoreId,
       recordCount: records.length,
-      templateCount: templates.length,
-      ruleCount: rules.length,
       records: records,
       templates: templates,
       rules: rules,
       filters: filters,
       groupMode: groupMode,
-      ownerInfo: ownerInfo,
-      schemaVersion: STORE_SCHEMA_VERSION
+      ownerInfo: ownerInfo
     };
     const jsonStr = JSON.stringify(exportData, null, 2);
     const blob = new Blob([jsonStr], { type: 'application/json' });
@@ -1907,7 +1897,7 @@ function App() {
     const link = document.createElement('a');
     link.href = url;
     const dateStr = formatLocalDate(new Date());
-    link.download = `${storeName}_完整备份_${dateStr}.json`;
+    link.download = `宠物疫苗提醒数据_${dateStr}.json`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -1936,7 +1926,7 @@ function App() {
     return `${prefix}\n\n📋 正确格式示例：\n${EXPECTED_FORMAT_SAMPLE}`;
   }
 
-  function buildValidationResult({ valid = true, errors = [], warnings = [], validRecords = [], invalidRecords = [], allWarnings = [], migratedCount = 0, totalRecords = 0, modules = null, configData = null }) {
+  function buildValidationResult({ valid = true, errors = [], warnings = [], validRecords = [], invalidRecords = [], allWarnings = [], migratedCount = 0, totalRecords = 0, modules = null }) {
     return {
       valid,
       errors: [...errors],
@@ -1948,8 +1938,7 @@ function App() {
       totalRecords: totalRecords || validRecords.length + invalidRecords.length,
       validCount: validRecords.length,
       invalidCount: invalidRecords.length,
-      modules,
-      configData
+      modules
     };
   }
 
@@ -1961,8 +1950,6 @@ function App() {
     const recordWarnings = [];
     let recordsToProcess = [];
     let migratedCount = 0;
-    let modules = null;
-    let configData = null;
 
     if (data === null || data === undefined) {
       errors.push(getExpectedFormatHint('❌ 文件内容为空：JSON解析结果为 null/undefined'));
@@ -1974,9 +1961,7 @@ function App() {
         invalidRecords: [],
         allWarnings: [],
         migratedCount: 0,
-        totalRecords: 0,
-        modules: null,
-        configData: null
+        totalRecords: 0
       });
     }
 
@@ -1990,44 +1975,8 @@ function App() {
         invalidRecords: [],
         allWarnings: [],
         migratedCount: 0,
-        totalRecords: 0,
-        modules: null,
-        configData: null
+        totalRecords: 0
       });
-    }
-
-    const hasTemplates = Array.isArray(data.templates) && data.templates.length > 0;
-    const hasRules = Array.isArray(data.rules) && data.rules.length > 0;
-    const hasFilters = data.filters !== undefined && data.filters !== null && typeof data.filters === 'object';
-    const hasGroupMode = data.groupMode !== undefined && data.groupMode !== null;
-    const hasOwnerInfo = data.ownerInfo !== undefined && data.ownerInfo !== null;
-    const isLegacyFormat = !hasTemplates && !hasRules && !hasFilters && !hasGroupMode;
-
-    if (hasTemplates || hasRules || hasFilters || hasGroupMode) {
-      modules = {
-        records: true,
-        templates: hasTemplates,
-        rules: hasRules,
-        filters: hasFilters,
-        groupMode: hasGroupMode,
-        isLegacyFormat: false
-      };
-      configData = {
-        templates: hasTemplates ? data.templates : null,
-        rules: hasRules ? data.rules : null,
-        filters: hasFilters ? data.filters : null,
-        groupMode: hasGroupMode ? data.groupMode : null,
-        ownerInfo: hasOwnerInfo ? data.ownerInfo : null
-      };
-    } else {
-      modules = {
-        records: true,
-        templates: false,
-        rules: false,
-        filters: false,
-        groupMode: false,
-        isLegacyFormat: true
-      };
     }
 
     if (data.records !== undefined && data.records !== null) {
@@ -2036,11 +1985,8 @@ function App() {
         if (data.appId && data.appId !== appConfig.id) {
           warnings.push(`⚠️ 备份文件来自不同应用(${data.appId})，可能存在字段不兼容`);
         }
-        if (data.version && data.version > 1) {
+        if (data.version && data.version > BACKUP_FORMAT_VERSION) {
           warnings.push(`⚠️ 备份文件版本(v${data.version})高于当前版本，部分字段可能无法识别`);
-        }
-        if (data.version === 2 && modules && !modules.isLegacyFormat) {
-          warnings.push('📦 检测到完整门店备份，包含模板、规则等配置数据');
         }
       } else {
         const valPreview = JSON.stringify(data.records).slice(0, 60);
@@ -2053,9 +1999,7 @@ function App() {
           invalidRecords: [],
           allWarnings: [...warnings],
           migratedCount: 0,
-          totalRecords: 0,
-          modules,
-          configData
+          totalRecords: 0
         });
       }
     } else if (Array.isArray(data)) {
@@ -2075,9 +2019,7 @@ function App() {
         invalidRecords: [],
         allWarnings: [...warnings],
         migratedCount: 0,
-        totalRecords: 0,
-        modules,
-        configData
+        totalRecords: 0
       });
     }
 
@@ -2208,6 +2150,21 @@ function App() {
 
     const hasFatalErrors = errors.some(e => !e.includes('条记录存在错误'));
 
+    const hasTemplates = Array.isArray(data?.templates) && data.templates.length > 0;
+    const hasRules = Array.isArray(data?.rules) && data.rules.length > 0;
+    const hasFilters = data?.filters !== undefined && data?.filters !== null && typeof data.filters === 'object';
+    const hasGroupMode = data?.groupMode !== undefined && data?.groupMode !== null;
+    const isLegacyFormat = !(hasTemplates || hasRules || hasFilters || hasGroupMode);
+
+    const modules = {
+      records: true,
+      templates: hasTemplates,
+      rules: hasRules,
+      filters: hasFilters,
+      groupMode: hasGroupMode,
+      isLegacyFormat: isLegacyFormat
+    };
+
     return buildValidationResult({
       valid: !hasFatalErrors,
       errors,
@@ -2217,8 +2174,7 @@ function App() {
       allWarnings: allWarningsList,
       migratedCount,
       totalRecords: recordsToProcess.length,
-      modules,
-      configData
+      modules
     });
   }
 
@@ -2282,11 +2238,6 @@ function App() {
   function processRestoreFile(file) {
     setRestoreError(null);
     setRestorePreview(null);
-    setMainRestoreRecords(true);
-    setMainRestoreTemplates(false);
-    setMainRestoreRules(false);
-    setMainRestoreFilters(false);
-    setMainRestoreGroupMode(false);
 
     if (!file.name.endsWith('.json') && file.type !== 'application/json') {
       setRestoreError({ type: 'format', message: '请上传JSON格式的备份文件' });
@@ -2320,14 +2271,21 @@ function App() {
           return;
         }
 
-        if (validation.modules && !validation.modules.isLegacyFormat) {
-          setMainRestoreTemplates(validation.modules.templates);
-          setMainRestoreRules(validation.modules.rules);
-          setMainRestoreFilters(validation.modules.filters);
-          setMainRestoreGroupMode(validation.modules.groupMode);
-        }
-
         const changes = calculateRestoreChanges(validation.validRecords);
+
+        if (validation.modules) {
+          setRestoreRecords(true);
+          setRestoreTemplates(validation.modules.templates);
+          setRestoreRules(validation.modules.rules);
+          setRestoreFilters(validation.modules.filters);
+          setRestoreGroupMode(validation.modules.groupMode);
+        } else {
+          setRestoreRecords(true);
+          setRestoreTemplates(false);
+          setRestoreRules(false);
+          setRestoreFilters(false);
+          setRestoreGroupMode(false);
+        }
 
         setRestoreFile(file);
         setRestorePreview({
@@ -2335,13 +2293,10 @@ function App() {
           fileSize: (file.size / 1024).toFixed(2),
           exportedAt: data.exportedAt || null,
           version: data.version || 0,
-          storeName: data.storeName || null,
-          templateCount: data.templateCount || (validation.configData?.templates?.length || 0),
-          ruleCount: data.ruleCount || (validation.configData?.rules?.length || 0),
           validation,
           changes,
-          modules: validation.modules,
-          configData: validation.configData
+          rawData: data,
+          modules: validation.modules
         });
         setBackupRestoreStep('preview');
       } catch (error) {
@@ -2378,54 +2333,60 @@ function App() {
 
   function confirmRestore() {
     if (!restorePreview) return;
-    if (!mainRestoreRecords && !mainRestoreTemplates && !mainRestoreRules && !mainRestoreFilters && !mainRestoreGroupMode) {
+
+    if (!restoreRecords && !restoreTemplates && !restoreRules && !restoreFilters && !restoreGroupMode) {
       alert('请至少选择一个要恢复的模块');
       return;
     }
 
-    const { changes, modules, configData } = restorePreview;
-    const isLegacy = modules?.isLegacyFormat;
-    const messages = [];
+    const { changes, rawData } = restorePreview;
+    const isLegacy = restorePreview.modules?.isLegacyFormat;
 
-    if (mainRestoreRecords) {
+    if (restoreRecords) {
       const mergedRecords = [...records];
+
       changes.overwriteRecords.forEach(({ newRecord }) => {
         const idx = mergedRecords.findIndex(r => r.id === newRecord.id);
         if (idx !== -1) {
           mergedRecords[idx] = newRecord;
         }
       });
+
       changes.addRecords.forEach(newRecord => {
         mergedRecords.unshift(newRecord);
       });
+
       persist(mergedRecords);
-      messages.push(`记录：新增 ${changes.addCount} 条，覆盖 ${changes.overwriteCount} 条，跳过 ${changes.skipCount} 条`);
     }
 
-    if (!isLegacy && configData) {
-      if (mainRestoreTemplates && configData.templates) {
-        saveTemplates(configData.templates);
-        messages.push(`免疫模板：${configData.templates.length} 个已恢复`);
+    if (!isLegacy && rawData) {
+      if (restoreTemplates && rawData.templates && Array.isArray(rawData.templates)) {
+        saveTemplates(rawData.templates.map(t => ({ ...t })));
       }
-      if (mainRestoreRules && configData.rules) {
-        saveRules(configData.rules);
-        messages.push(`提醒规则：${configData.rules.length} 条已恢复`);
+      if (restoreRules && rawData.rules && Array.isArray(rawData.rules)) {
+        saveRules(rawData.rules.map(r => ({ ...r, overdueLevels: (r.overdueLevels || []).map(ol => ({ ...ol })) })));
       }
-      if (mainRestoreFilters && configData.filters) {
-        saveFilters(configData.filters);
-        messages.push('筛选条件已恢复');
+      if (restoreFilters && rawData.filters && typeof rawData.filters === 'object') {
+        saveFilters(normalizeFilters(rawData.filters));
       }
-      if (mainRestoreGroupMode && configData.groupMode) {
-        saveGroupMode(configData.groupMode);
-        messages.push(`分组模式已恢复为：${configData.groupMode === 'auto' ? '自动' : configData.groupMode}`);
+      if (restoreGroupMode && rawData.groupMode) {
+        saveGroupMode(rawData.groupMode);
       }
-      if (configData.ownerInfo && (mainRestoreTemplates || mainRestoreRules)) {
-        saveOwnerInfo(configData.ownerInfo);
-      }
+    }
+
+    const msgParts = [];
+    if (restoreRecords) {
+      msgParts.push(`记录：新增 ${changes.addCount} 条，覆盖 ${changes.overwriteCount} 条，跳过 ${changes.skipCount} 条`);
+    }
+    if (!isLegacy) {
+      if (restoreTemplates) msgParts.push('模板：已覆盖');
+      if (restoreRules) msgParts.push('规则：已覆盖');
+      if (restoreFilters) msgParts.push('筛选条件：已覆盖');
+      if (restoreGroupMode) msgParts.push('分组模式：已覆盖');
     }
 
     cancelRestore();
-    alert(`恢复完成：\n${messages.join('\n')}`);
+    alert(`恢复完成：\n${msgParts.join('\n')}`);
   }
 
   function cancelRestore() {
@@ -2434,11 +2395,11 @@ function App() {
     setRestorePreview(null);
     setRestoreFile(null);
     setRestoreError(null);
-    setMainRestoreRecords(true);
-    setMainRestoreTemplates(false);
-    setMainRestoreRules(false);
-    setMainRestoreFilters(false);
-    setMainRestoreGroupMode(false);
+    setRestoreRecords(true);
+    setRestoreTemplates(false);
+    setRestoreRules(false);
+    setRestoreFilters(false);
+    setRestoreGroupMode(false);
     if (restoreFileInputRef.current) {
       restoreFileInputRef.current.value = '';
     }
@@ -4396,9 +4357,9 @@ function App() {
                       <FileText size={32} />
                     </div>
                     <h3>导出数据</h3>
-                    <p>将当前门店的完整数据导出为JSON备份文件，包含客户记录、免疫模板、提醒规则、筛选条件和分组模式等全部配置。</p>
+                    <p>将当前门店的完整数据导出为JSON备份文件，包含记录、模板、规则、筛选条件和分组模式等所有配置。</p>
                     <div className="record-count-info">
-                      共 <strong>{records.length}</strong> 条记录、<strong>{templates.length}</strong> 个模板、<strong>{rules.length}</strong> 条规则将被导出
+                      共 <strong>{records.length}</strong> 条记录将被导出
                     </div>
                     <button
                       type="button"
@@ -4409,7 +4370,7 @@ function App() {
                       }}
                     >
                       <FileText size={16} />
-                      导出完整备份
+                      导出JSON文件
                     </button>
                   </div>
 
@@ -4418,10 +4379,10 @@ function App() {
                       <Upload size={32} />
                     </div>
                     <h3>恢复数据</h3>
-                    <p>选择之前导出的JSON备份文件恢复数据。新版备份可选择性恢复记录、模板、规则等模块，旧版仅含记录的备份按原有逻辑兼容。</p>
+                    <p>选择之前导出的JSON备份文件恢复数据。可选择需要恢复的模块，恢复前将展示预览信息，确认后才会执行。</p>
                     <p className="warning-text">
                       <AlertTriangle size={14} />
-                      注意：记录按ID相同覆盖、相同宠物+疫苗跳过；配置类模块将整体覆盖
+                      注意：记录按ID覆盖、宠物+疫苗重复会跳过；配置类模块将整体覆盖
                     </p>
                     <div
                       className="drop-zone"
@@ -4462,11 +4423,6 @@ function App() {
                     setRestorePreview(null);
                     setRestoreFile(null);
                     setRestoreError(null);
-                    setMainRestoreRecords(true);
-                    setMainRestoreTemplates(false);
-                    setMainRestoreRules(false);
-                    setMainRestoreFilters(false);
-                    setMainRestoreGroupMode(false);
                     if (restoreFileInputRef.current) {
                       restoreFileInputRef.current.value = '';
                     }
@@ -4487,12 +4443,6 @@ function App() {
                       <span className="info-label">文件大小</span>
                       <span className="info-value">{restorePreview.fileSize} KB</span>
                     </div>
-                    {restorePreview.storeName && (
-                      <div className="info-item">
-                        <span className="info-label">来源门店</span>
-                        <span className="info-value">{restorePreview.storeName}</span>
-                      </div>
-                    )}
                     {restorePreview.exportedAt && (
                       <div className="info-item">
                         <span className="info-label">导出时间</span>
@@ -4508,104 +4458,104 @@ function App() {
                   </div>
                 </div>
 
-                {restorePreview.modules && (
+                {restorePreview.modules?.isLegacyFormat ? (
                   <div className="restore-modules-section">
-                    <h3><Settings size={16} className="info-icon" />恢复模块</h3>
-                    {restorePreview.modules.isLegacyFormat ? (
-                      <div className="import-modules-legacy">
-                        <p className="legacy-hint">⚠️ 旧版备份仅包含记录数据，将按原有逻辑恢复</p>
-                        <label className="module-checkbox disabled">
-                          <input
-                            type="checkbox"
-                            checked={mainRestoreRecords}
-                            disabled
-                          />
-                          <span className="module-label">
-                            <span className="module-name">客户记录</span>
-                            <span className="module-count">{restorePreview.changes.totalValid} 条有效记录</span>
+                    <h3><Info size={16} className="info-icon" />恢复模块</h3>
+                    <div className="restore-modules-legacy">
+                      <p className="legacy-hint">⚠️ 旧版备份仅包含记录数据，将按原有逻辑恢复（新增/覆盖/跳过）</p>
+                      <label className="module-checkbox disabled">
+                        <input
+                          type="checkbox"
+                          checked={restoreRecords}
+                          disabled
+                        />
+                        <span className="module-label">
+                          <span className="module-name">客户记录</span>
+                          <span className="module-count">{restorePreview.changes.totalValid} 条有效记录</span>
+                        </span>
+                      </label>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="restore-modules-section">
+                    <h3><Info size={16} className="info-icon" />选择要恢复的模块</h3>
+                    <div className="restore-modules-list">
+                      <label className="module-checkbox">
+                        <input
+                          type="checkbox"
+                          checked={restoreRecords}
+                          onChange={(e) => setRestoreRecords(e.target.checked)}
+                        />
+                        <span className="module-label">
+                          <span className="module-name">客户记录</span>
+                          <span className="module-count">{restorePreview.changes.totalValid} 条记录（新增/覆盖/跳过）</span>
+                        </span>
+                      </label>
+                      <label className={`module-checkbox ${!restorePreview.modules?.templates ? 'disabled' : ''}`}>
+                        <input
+                          type="checkbox"
+                          checked={restorePreview.modules?.templates ? restoreTemplates : false}
+                          disabled={!restorePreview.modules?.templates}
+                          onChange={(e) => setRestoreTemplates(e.target.checked)}
+                        />
+                        <span className="module-label">
+                          <span className="module-name">免疫模板</span>
+                          <span className="module-count">
+                            {restorePreview.modules?.templates
+                              ? `${restorePreview.rawData?.templates?.length || 0} 个模板（将被覆盖）`
+                              : '备份中不包含'}
                           </span>
-                        </label>
-                      </div>
-                    ) : (
-                      <div className="import-modules">
-                        <p className="modules-title">选择要恢复的模块（未勾选的模块将保持原样）：</p>
-                        <label className="module-checkbox">
-                          <input
-                            type="checkbox"
-                            checked={mainRestoreRecords}
-                            onChange={(e) => setMainRestoreRecords(e.target.checked)}
-                          />
-                          <span className="module-label">
-                            <span className="module-name">客户记录</span>
-                            <span className="module-count">{restorePreview.changes.totalValid} 条记录（新增{restorePreview.changes.addCount}，覆盖{restorePreview.changes.overwriteCount}，跳过{restorePreview.changes.skipCount}）</span>
+                        </span>
+                      </label>
+                      <label className={`module-checkbox ${!restorePreview.modules?.rules ? 'disabled' : ''}`}>
+                        <input
+                          type="checkbox"
+                          checked={restorePreview.modules?.rules ? restoreRules : false}
+                          disabled={!restorePreview.modules?.rules}
+                          onChange={(e) => setRestoreRules(e.target.checked)}
+                        />
+                        <span className="module-label">
+                          <span className="module-name">提醒规则</span>
+                          <span className="module-count">
+                            {restorePreview.modules?.rules
+                              ? `${restorePreview.rawData?.rules?.length || 0} 条规则（将被覆盖）`
+                              : '备份中不包含'}
                           </span>
-                        </label>
-                        <label className={`module-checkbox ${!restorePreview.modules.templates ? 'disabled' : ''}`}>
-                          <input
-                            type="checkbox"
-                            checked={restorePreview.modules.templates ? mainRestoreTemplates : false}
-                            disabled={!restorePreview.modules.templates}
-                            onChange={(e) => setMainRestoreTemplates(e.target.checked)}
-                          />
-                          <span className="module-label">
-                            <span className="module-name">免疫模板</span>
-                            <span className="module-count">
-                              {restorePreview.modules.templates
-                                ? `${restorePreview.templateCount || restorePreview.configData?.templates?.length || 0} 个模板（将整体覆盖）`
-                                : '备份中不包含'}
-                            </span>
+                        </span>
+                      </label>
+                      <label className={`module-checkbox ${!restorePreview.modules?.filters ? 'disabled' : ''}`}>
+                        <input
+                          type="checkbox"
+                          checked={restorePreview.modules?.filters ? restoreFilters : false}
+                          disabled={!restorePreview.modules?.filters}
+                          onChange={(e) => setRestoreFilters(e.target.checked)}
+                        />
+                        <span className="module-label">
+                          <span className="module-name">筛选条件</span>
+                          <span className="module-count">
+                            {restorePreview.modules?.filters
+                              ? '包含（将被覆盖）'
+                              : '备份中不包含'}
                           </span>
-                        </label>
-                        <label className={`module-checkbox ${!restorePreview.modules.rules ? 'disabled' : ''}`}>
-                          <input
-                            type="checkbox"
-                            checked={restorePreview.modules.rules ? mainRestoreRules : false}
-                            disabled={!restorePreview.modules.rules}
-                            onChange={(e) => setMainRestoreRules(e.target.checked)}
-                          />
-                          <span className="module-label">
-                            <span className="module-name">提醒规则</span>
-                            <span className="module-count">
-                              {restorePreview.modules.rules
-                                ? `${restorePreview.ruleCount || restorePreview.configData?.rules?.length || 0} 条规则（将整体覆盖）`
-                                : '备份中不包含'}
-                            </span>
+                        </span>
+                      </label>
+                      <label className={`module-checkbox ${!restorePreview.modules?.groupMode ? 'disabled' : ''}`}>
+                        <input
+                          type="checkbox"
+                          checked={restorePreview.modules?.groupMode ? restoreGroupMode : false}
+                          disabled={!restorePreview.modules?.groupMode}
+                          onChange={(e) => setRestoreGroupMode(e.target.checked)}
+                        />
+                        <span className="module-label">
+                          <span className="module-name">分组模式</span>
+                          <span className="module-count">
+                            {restorePreview.modules?.groupMode
+                              ? '包含（将被覆盖）'
+                              : '备份中不包含'}
                           </span>
-                        </label>
-                        <label className={`module-checkbox ${!restorePreview.modules.filters ? 'disabled' : ''}`}>
-                          <input
-                            type="checkbox"
-                            checked={restorePreview.modules.filters ? mainRestoreFilters : false}
-                            disabled={!restorePreview.modules.filters}
-                            onChange={(e) => setMainRestoreFilters(e.target.checked)}
-                          />
-                          <span className="module-label">
-                            <span className="module-name">筛选条件</span>
-                            <span className="module-count">
-                              {restorePreview.modules.filters
-                                ? '包含（将被覆盖）'
-                                : '备份中不包含'}
-                            </span>
-                          </span>
-                        </label>
-                        <label className={`module-checkbox ${!restorePreview.modules.groupMode ? 'disabled' : ''}`}>
-                          <input
-                            type="checkbox"
-                            checked={restorePreview.modules.groupMode ? mainRestoreGroupMode : false}
-                            disabled={!restorePreview.modules.groupMode}
-                            onChange={(e) => setMainRestoreGroupMode(e.target.checked)}
-                          />
-                          <span className="module-label">
-                            <span className="module-name">分组模式</span>
-                            <span className="module-count">
-                              {restorePreview.modules.groupMode
-                                ? `包含（${restorePreview.configData?.groupMode === 'auto' ? '自动' : restorePreview.configData?.groupMode}，将被覆盖）`
-                                : '备份中不包含'}
-                            </span>
-                          </span>
-                        </label>
-                      </div>
-                    )}
+                        </span>
+                      </label>
+                    </div>
                   </div>
                 )}
 
@@ -4640,43 +4590,45 @@ function App() {
                   </div>
                 )}
 
-                <div className="restore-summary">
-                  <h3><Info size={16} />恢复统计</h3>
-                  <div className="summary-cards">
-                    <div className="summary-card add-card">
-                      <div className="summary-icon add-icon">
-                        <Plus size={24} />
+                {restoreRecords && (
+                  <div className="restore-summary">
+                    <h3><Info size={16} />记录恢复统计</h3>
+                    <div className="summary-cards">
+                      <div className="summary-card add-card">
+                        <div className="summary-icon add-icon">
+                          <Plus size={24} />
+                        </div>
+                        <div className="summary-content">
+                          <span className="summary-label">新增记录</span>
+                          <span className="summary-value">{restorePreview.changes.addCount}</span>
+                        </div>
                       </div>
-                      <div className="summary-content">
-                        <span className="summary-label">新增记录</span>
-                        <span className="summary-value">{restorePreview.changes.addCount}</span>
+                      <div className="summary-card overwrite-card">
+                        <div className="summary-icon overwrite-icon">
+                          <Edit3 size={24} />
+                        </div>
+                        <div className="summary-content">
+                          <span className="summary-label">覆盖记录</span>
+                          <span className="summary-value">{restorePreview.changes.overwriteCount}</span>
+                        </div>
+                      </div>
+                      <div className="summary-card skip-card">
+                        <div className="summary-icon skip-icon">
+                          <X size={24} />
+                        </div>
+                        <div className="summary-content">
+                          <span className="summary-label">跳过记录</span>
+                          <span className="summary-value">{restorePreview.changes.skipCount}</span>
+                        </div>
                       </div>
                     </div>
-                    <div className="summary-card overwrite-card">
-                      <div className="summary-icon overwrite-icon">
-                        <Edit3 size={24} />
-                      </div>
-                      <div className="summary-content">
-                        <span className="summary-label">覆盖记录</span>
-                        <span className="summary-value">{restorePreview.changes.overwriteCount}</span>
-                      </div>
-                    </div>
-                    <div className="summary-card skip-card">
-                      <div className="summary-icon skip-icon">
-                        <X size={24} />
-                      </div>
-                      <div className="summary-content">
-                        <span className="summary-label">跳过记录</span>
-                        <span className="summary-value">{restorePreview.changes.skipCount}</span>
-                      </div>
+                    <div className="summary-total">
+                      有效记录：{restorePreview.changes.totalValid} 条 / 当前记录：{records.length} 条
                     </div>
                   </div>
-                  <div className="summary-total">
-                    有效记录：{restorePreview.changes.totalValid} 条 / 当前记录：{records.length} 条
-                  </div>
-                </div>
+                )}
 
-                {restorePreview.changes.overwriteCount > 0 && (
+                {restoreRecords && restorePreview.changes.overwriteCount > 0 && (
                   <div className="overwrite-preview-section">
                     <h3><AlertTriangle size={16} className="warning-icon" />将被覆盖的记录（前5条）</h3>
                     <div className="overwrite-table-container">
@@ -4710,7 +4662,7 @@ function App() {
                   </div>
                 )}
 
-                {restorePreview.changes.addCount > 0 && (
+                {restoreRecords && restorePreview.changes.addCount > 0 && (
                   <div className="add-preview-section">
                     <h3><CheckCircle2 size={16} className="success-icon" />将新增的记录（前5条）</h3>
                     <div className="preview-table-container">
@@ -4742,7 +4694,7 @@ function App() {
                   </div>
                 )}
 
-                {restorePreview.changes.skipCount > 0 && (
+                {restoreRecords && restorePreview.changes.skipCount > 0 && (
                   <div className="skip-preview-section">
                     <h3><Info size={16} className="info-icon" />将跳过的记录（前5条）</h3>
                     <div className="skip-table-container">
@@ -4779,25 +4731,10 @@ function App() {
                   type="button"
                   className="btn-primary"
                   onClick={confirmRestore}
-                  disabled={
-                    !mainRestoreRecords && !mainRestoreTemplates && !mainRestoreRules && !mainRestoreFilters && !mainRestoreGroupMode
-                      ? true
-                      : mainRestoreRecords && restorePreview.changes.addCount === 0 && restorePreview.changes.overwriteCount === 0
-                        ? !mainRestoreTemplates && !mainRestoreRules && !mainRestoreFilters && !mainRestoreGroupMode
-                        : false
-                  }
+                  disabled={!restoreRecords && !restoreTemplates && !restoreRules && !restoreFilters && !restoreGroupMode}
                 >
                   <CheckCheck size={16} />
                   确认恢复
-                  {(() => {
-                    const parts = [];
-                    if (mainRestoreRecords) parts.push(`记录+${restorePreview.changes.addCount}/覆${restorePreview.changes.overwriteCount}`);
-                    if (mainRestoreTemplates) parts.push(`${restorePreview.templateCount || restorePreview.configData?.templates?.length || 0}模板`);
-                    if (mainRestoreRules) parts.push(`${restorePreview.ruleCount || restorePreview.configData?.rules?.length || 0}规则`);
-                    if (mainRestoreFilters) parts.push('筛选');
-                    if (mainRestoreGroupMode) parts.push('分组');
-                    return parts.length > 0 ? `（${parts.join('、')}）` : '';
-                  })()}
                 </button>
               </div>
             )}
