@@ -432,7 +432,7 @@ function createDefaultStoreData() {
     records: withIds(appConfig.seed),
     templates: [...defaultTemplates],
     rules: defaultRules.map(r => ({ ...r, overdueLevels: (r.overdueLevels || []).map(ol => ({ ...ol })) })),
-    filters: { query: '', status: '全部' },
+    filters: { query: '', status: '全部', species: '全部', vaccine: '全部' },
     groupMode: 'auto',
     ownerInfo: {},
     schemaVersion: STORE_SCHEMA_VERSION
@@ -484,7 +484,7 @@ function migrateFromSingleStore() {
     records,
     templates,
     rules,
-    filters: { query: '', status: '全部' },
+    filters: { query: '', status: '全部', species: '全部', vaccine: '全部' },
     groupMode: 'auto',
     ownerInfo: {},
     schemaVersion: STORE_SCHEMA_VERSION
@@ -568,7 +568,7 @@ function createStore(name, templateStoreId) {
         records: storeData.records.map(r => ({ ...r, id: uid(), timeline: [...(r.timeline || [])], notes: [...(r.notes || [])] })),
         templates: (storeData.templates || []).map(t => ({ ...t })),
         rules: (storeData.rules || []).map(r => ({ ...r, overdueLevels: (r.overdueLevels || []).map(ol => ({ ...ol })) })),
-        filters: { query: '', status: '全部' },
+        filters: { query: '', status: '全部', species: '全部', vaccine: '全部' },
         groupMode: storeData.groupMode || 'auto',
         ownerInfo: storeData.ownerInfo || {}
       };
@@ -681,7 +681,7 @@ function validateImportStoreData(rawData) {
       records: rawData.records,
       templates: [...defaultTemplates],
       rules: defaultRules.map(r => ({ ...r })),
-      filters: { query: '', status: '全部' },
+      filters: { query: '', status: '全部', species: '全部', vaccine: '全部' },
       groupMode: 'auto'
     };
     warnings.push('检测到旧版数据格式，已自动转换为门店数据');
@@ -706,7 +706,7 @@ function validateImportStoreData(rawData) {
     records: normalizedRecords,
     templates: Array.isArray(storeData.templates) ? storeData.templates : [...defaultTemplates],
     rules: Array.isArray(storeData.rules) ? storeData.rules : defaultRules.map(r => ({ ...r })),
-    filters: storeData.filters || { query: '', status: '全部' },
+    filters: storeData.filters || { query: '', status: '全部', species: '全部', vaccine: '全部' },
     groupMode: storeData.groupMode || 'auto',
     ownerInfo: storeData.ownerInfo || {},
     schemaVersion: STORE_SCHEMA_VERSION
@@ -823,13 +823,22 @@ function statusClass(status) {
   return ['status-a', 'status-b', 'status-c', 'status-d'][index] || 'status-a';
 }
 
+function normalizeFilters(filters) {
+  return {
+    query: filters?.query ?? '',
+    status: filters?.status ?? '全部',
+    species: filters?.species ?? '全部',
+    vaccine: filters?.vaccine ?? '全部'
+  };
+}
+
 function App() {
   const initialStoreState = useMemo(() => initStores(), []);
   const [stores, setStores] = useState(initialStoreState.meta.stores);
   const [currentStoreId, setCurrentStoreId] = useState(initialStoreState.storeId);
   const [records, setRecords] = useState(initialStoreState.storeData.records);
   const [form, setForm] = useState(appConfig.defaultValues);
-  const [filters, setFilters] = useState(initialStoreState.storeData.filters);
+  const [filters, setFilters] = useState(normalizeFilters(initialStoreState.storeData.filters));
   const [selected, setSelected] = useState(null);
   const [newNoteContent, setNewNoteContent] = useState('');
   const [newNoteOperator, setNewNoteOperator] = useState('');
@@ -948,7 +957,7 @@ function App() {
       setRecords(result.storeData.records || []);
       setTemplates(result.storeData.templates || [...defaultTemplates]);
       setRules(result.storeData.rules || defaultRules.map(r => ({ ...r })));
-      setFilters(result.storeData.filters || { query: '', status: '全部' });
+      setFilters(normalizeFilters(result.storeData.filters));
       setGroupMode(result.storeData.groupMode || 'auto');
       setOwnerInfo(result.storeData.ownerInfo || {});
       setSelected(null);
@@ -973,7 +982,7 @@ function App() {
       setRecords(result.storeData.records || []);
       setTemplates(result.storeData.templates || [...defaultTemplates]);
       setRules(result.storeData.rules || defaultRules.map(r => ({ ...r })));
-      setFilters(result.storeData.filters || { query: '', status: '全部' });
+      setFilters(normalizeFilters(result.storeData.filters));
       setGroupMode(result.storeData.groupMode || 'auto');
       setOwnerInfo(result.storeData.ownerInfo || {});
       setSelected(null);
@@ -1024,7 +1033,7 @@ function App() {
           setRecords(newStoreData.records || []);
           setTemplates(newStoreData.templates || [...defaultTemplates]);
           setRules(newStoreData.rules || defaultRules.map(r => ({ ...r })));
-          setFilters(newStoreData.filters || { query: '', status: '全部' });
+          setFilters(normalizeFilters(newStoreData.filters));
           setGroupMode(newStoreData.groupMode || 'auto');
           setOwnerInfo(newStoreData.ownerInfo || {});
           setSelected(null);
@@ -1100,7 +1109,7 @@ function App() {
       setRecords(data.records || []);
       setTemplates(data.templates || [...defaultTemplates]);
       setRules(data.rules || defaultRules.map(r => ({ ...r })));
-      setFilters(data.filters || { query: '', status: '全部' });
+      setFilters(normalizeFilters(data.filters));
       setGroupMode(data.groupMode || 'auto');
       setOwnerInfo(data.ownerInfo || {});
       setSelected(null);
@@ -2120,6 +2129,8 @@ function App() {
     return records
       .filter((item) => !filters.query || `${item.pet}${item.ownerPhone}`.includes(filters.query))
       .filter((item) => filters.status === '全部' || item.status === filters.status)
+      .filter((item) => filters.species === '全部' || item.species === filters.species)
+      .filter((item) => filters.vaccine === '全部' || item.vaccine === filters.vaccine)
       .sort((a, b) => {
         if (appConfig.sort === 'priority') {
           const rank = priorityRank(a.priority) - priorityRank(b.priority);
@@ -2146,9 +2157,9 @@ function App() {
   }, [records, filters, rules]);
 
   const metrics = [
-    { label: "宠物数", value: records.length },
-    { label: "待联系", value: records.filter((item) => item.status === '待联系').length },
-    { label: "即将到期", value: records.filter((item) => {
+    { label: "宠物数", value: filteredRecords.length },
+    { label: "待联系", value: filteredRecords.filter((item) => item.status === '待联系').length },
+    { label: "即将到期", value: filteredRecords.filter((item) => {
       if (!item.nextDate) return false;
       const adv = getAdvanceDays(item.vaccine, rules);
       return inNextDays(item.nextDate, adv);
@@ -2159,7 +2170,7 @@ function App() {
     const overdueByLevel = {};
     const todayList = [];
     const upcomingList = [];
-    records.forEach(item => {
+    filteredRecords.forEach(item => {
       if (isOverdue(item.nextDate)) {
         const diff = Math.abs(daysDiff(item.nextDate));
         const level = getOverdueLevel(diff, item.vaccine, rules);
@@ -2181,7 +2192,7 @@ function App() {
     todayList.sort((a, b) => parseLocalDate(a.nextDate) - parseLocalDate(b.nextDate));
     upcomingList.sort((a, b) => parseLocalDate(a.nextDate) - parseLocalDate(b.nextDate));
     return { overdueByLevel, today: todayList, upcoming: upcomingList };
-  }, [records, rules]);
+  }, [filteredRecords, rules]);
 
   const groupedByDate = useMemo(() => {
     if (groupMode === 'auto') {
@@ -2257,6 +2268,8 @@ function App() {
     return records
       .filter((item) => !filters.query || `${item.pet}${item.ownerPhone}`.includes(filters.query))
       .filter((item) => filters.status === '全部' || item.status === filters.status)
+      .filter((item) => filters.species === '全部' || item.species === filters.species)
+      .filter((item) => filters.vaccine === '全部' || item.vaccine === filters.vaccine)
       .reduce((acc, item) => {
         const date = item.nextDate;
         if (date) {
@@ -3259,6 +3272,14 @@ function App() {
                   <option>全部</option>
                   {appConfig.statuses.map((status) => <option key={status}>{status}</option>)}
                 </select>
+                <select value={filters.species} onChange={(event) => saveFilters({ ...filters, species: event.target.value })}>
+                  <option value="全部">全部物种</option>
+                  {appConfig.fields.find(f => f.key === 'species').options.map((o) => <option key={o}>{o}</option>)}
+                </select>
+                <select value={filters.vaccine} onChange={(event) => saveFilters({ ...filters, vaccine: event.target.value })}>
+                  <option value="全部">全部疫苗</option>
+                  {appConfig.fields.find(f => f.key === 'vaccine').options.map((o) => <option key={o}>{o}</option>)}
+                </select>
               </div>
             </div>
             <div className="calendar-legend">
@@ -3492,6 +3513,14 @@ function App() {
                 <select value={filters.status} onChange={(event) => saveFilters({ ...filters, status: event.target.value })}>
                   <option>全部</option>
                   {appConfig.statuses.map((status) => <option key={status}>{status}</option>)}
+                </select>
+                <select value={filters.species} onChange={(event) => saveFilters({ ...filters, species: event.target.value })}>
+                  <option value="全部">全部物种</option>
+                  {appConfig.fields.find(f => f.key === 'species').options.map((o) => <option key={o}>{o}</option>)}
+                </select>
+                <select value={filters.vaccine} onChange={(event) => saveFilters({ ...filters, vaccine: event.target.value })}>
+                  <option value="全部">全部疫苗</option>
+                  {appConfig.fields.find(f => f.key === 'vaccine').options.map((o) => <option key={o}>{o}</option>)}
                 </select>
               </div>
 
