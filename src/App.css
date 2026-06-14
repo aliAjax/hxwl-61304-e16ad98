@@ -1044,6 +1044,82 @@ textarea { min-height: 76px; resize: vertical; }
   color: #374151;
 }
 
+.mapping-hint {
+  margin: 0 0 12px 0;
+  color: #6b7280;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.field-mapping-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.field-mapping-row {
+  display: grid;
+  grid-template-columns: 110px 24px 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: #f9fafb;
+  border-radius: 6px;
+  border: 1px solid #e5e7eb;
+}
+
+.field-mapping-row.detected {
+  background: #ecfdf3;
+  border-color: #a7f3d0;
+}
+
+.field-mapping-row.missing {
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+
+.field-name-col {
+  display: flex;
+  align-items: center;
+}
+
+.field-arrow-col {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #9ca3af;
+}
+
+.field-mapping-row.detected .mapping-arrow {
+  color: #10b981;
+}
+
+.field-mapping-row.missing .mapping-arrow {
+  color: #f87171;
+}
+
+.field-select-col {
+  display: flex;
+  align-items: center;
+}
+
+.field-mapping-select {
+  width: 100%;
+  padding: 8px 10px;
+  font-size: 13px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: #fff;
+  color: #111827;
+  cursor: pointer;
+}
+
+.field-mapping-select:focus {
+  outline: none;
+  border-color: var(--accent, #db2777);
+  box-shadow: 0 0 0 3px rgba(219, 39, 119, 0.1);
+}
+
 .detected-badge {
   display: inline-flex;
   align-items: center;
@@ -1875,6 +1951,17 @@ textarea { min-height: 76px; resize: vertical; }
 
   .field-mapping-grid {
     grid-template-columns: 1fr;
+  }
+
+  .field-mapping-row {
+    grid-template-columns: 90px 20px 1fr;
+    gap: 6px;
+    padding: 8px 10px;
+  }
+
+  .field-mapping-select {
+    font-size: 12px;
+    padding: 6px 8px;
   }
 
   .import-modal {

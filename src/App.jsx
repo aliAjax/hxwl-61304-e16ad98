@@ -845,6 +845,7 @@ function App() {
   const [showImportModal, setShowImportModal] = useState(false);
   const [importPreview, setImportPreview] = useState(null);
   const [importFile, setImportFile] = useState(null);
+  const [rawCSVData, setRawCSVData] = useState(null);
   const fileInputRef = useRef(null);
   const [showBackupRestoreModal, setShowBackupRestoreModal] = useState(false);
   const [backupRestoreStep, setBackupRestoreStep] = useState('main');
@@ -1661,6 +1662,59 @@ function App() {
     return { fileDuplicates, existingDuplicates: [...new Set(existingDuplicates)] };
   }
 
+  const requiredFields = ['pet', 'ownerPhone', 'vaccine', 'nextDate'];
+
+  function buildImportPreview(fileName, headers, rows, fieldMapping) {
+    const missingRequiredFields = requiredFields.filter(field => fieldMapping[field] === undefined);
+    const missingRequiredFieldLabels = missingRequiredFields.map(
+      field => appConfig.fields.find(f => f.key === field)?.label || field
+    );
+    const validatedRows = rows.map((row, index) => ({
+      rowIndex: index + 2,
+      ...validateRow(row, fieldMapping, headers, index + 2, missingRequiredFields),
+      rawRow: row
+    }));
+    const validRows = validatedRows.filter(r => r.valid);
+    const errorRows = validatedRows.filter(r => !r.valid && !r.skipped);
+    const { fileDuplicates, existingDuplicates } = findDuplicates(validRows, records);
+    const detectedFields = appConfig.fields.map(field => ({
+      ...field,
+      detected: fieldMapping[field.key] !== undefined,
+      sourceColumn: fieldMapping[field.key] !== undefined ? headers[fieldMapping[field.key]] : null,
+      required: requiredFields.includes(field.key)
+    }));
+    return {
+      fileName,
+      totalRows: rows.length,
+      headers,
+      fieldMapping,
+      detectedFields,
+      validRows,
+      errorRows,
+      fileDuplicates,
+      existingDuplicates,
+      missingRequiredFields: missingRequiredFieldLabels,
+      allWarnings: validRows.flatMap(r => r.warnings.map(w => `第${r.rowIndex}行：${w}`))
+    };
+  }
+
+  function handleFieldMappingChange(fieldKey, columnIndex) {
+    if (!importPreview || !rawCSVData) return;
+    const newMapping = { ...importPreview.fieldMapping };
+    if (columnIndex === null || columnIndex === undefined || columnIndex === '') {
+      delete newMapping[fieldKey];
+    } else {
+      newMapping[fieldKey] = Number(columnIndex);
+    }
+    const preview = buildImportPreview(
+      importPreview.fileName,
+      rawCSVData.headers,
+      rawCSVData.rows,
+      newMapping
+    );
+    setImportPreview(preview);
+  }
+
   function processCSVFile(file) {
     setImportFile(file);
     const reader = new FileReader();
@@ -1668,39 +1722,10 @@ function App() {
       try {
         const text = e.target.result;
         const { headers, rows } = parseCSV(text);
+        setRawCSVData({ headers, rows });
         const fieldMapping = detectFieldMapping(headers);
-        const requiredFields = ['pet', 'ownerPhone', 'vaccine', 'nextDate'];
-        const missingRequiredFields = requiredFields.filter(field => fieldMapping[field] === undefined);
-        const missingRequiredFieldLabels = missingRequiredFields.map(
-          field => appConfig.fields.find(f => f.key === field)?.label || field
-        );
-        const validatedRows = rows.map((row, index) => ({
-          rowIndex: index + 2,
-          ...validateRow(row, fieldMapping, headers, index + 2, missingRequiredFields),
-          rawRow: row
-        }));
-        const validRows = validatedRows.filter(r => r.valid);
-        const errorRows = validatedRows.filter(r => !r.valid && !r.skipped);
-        const { fileDuplicates, existingDuplicates } = findDuplicates(validRows, records);
-        const detectedFields = appConfig.fields.map(field => ({
-          ...field,
-          detected: fieldMapping[field.key] !== undefined,
-          sourceColumn: fieldMapping[field.key] !== undefined ? headers[fieldMapping[field.key]] : null,
-          required: requiredFields.includes(field.key)
-        }));
-        setImportPreview({
-          fileName: file.name,
-          totalRows: rows.length,
-          headers,
-          fieldMapping,
-          detectedFields,
-          validRows,
-          errorRows,
-          fileDuplicates,
-          existingDuplicates,
-          missingRequiredFields: missingRequiredFieldLabels,
-          allWarnings: validRows.flatMap(r => r.warnings.map(w => `第${r.rowIndex}行：${w}`))
-        });
+        const preview = buildImportPreview(file.name, headers, rows, fieldMapping);
+        setImportPreview(preview);
       } catch (error) {
         alert('CSV文件解析失败，请检查文件格式');
         console.error(error);
@@ -1748,6 +1773,7 @@ function App() {
     setShowImportModal(false);
     setImportPreview(null);
     setImportFile(null);
+    setRawCSVData(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -1758,6 +1784,7 @@ function App() {
     setShowImportModal(false);
     setImportPreview(null);
     setImportFile(null);
+    setRawCSVData(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -3985,37 +4012,50 @@ function App() {
 
                   {importPreview.missingRequiredFields && importPreview.missingRequiredFields.length > 0 && (
                     <div className="preview-section fatal-section">
-                      <h3><AlertOctagon size={16} className="fatal-icon" />字段缺失</h3>
-                      <p className="fatal-text">CSV文件缺少以下必填字段列，无法进行导入：</p>
+                      <h3><AlertOctagon size={16} className="fatal-icon" />缺少必填字段映射</h3>
+                      <p className="fatal-text">以下必填字段尚未映射到CSV列，无法进行导入：</p>
                       <div className="missing-fields-list">
                         {importPreview.missingRequiredFields.map((field) => (
                           <span key={field} className="missing-field-item">{field}</span>
                         ))}
                       </div>
-                      <p className="fatal-hint">请补充以上列后重新上传文件。</p>
+                      <p className="fatal-hint">请在下方"字段映射设置"中为这些字段选择对应的CSV列。</p>
                     </div>
                   )}
 
                   <div className="preview-section">
-                    <h3><FileText size={16} />字段识别结果</h3>
-                    <div className="field-mapping-grid">
+                    <h3><Settings size={16} />字段映射设置</h3>
+                    <p className="mapping-hint">系统已自动识别列名，您可以手动调整CSV列与系统字段的对应关系。</p>
+                    <div className="field-mapping-editor">
                       {importPreview.detectedFields.map((field) => (
-                        <div key={field.key} className={`field-mapping-item ${field.detected ? 'detected' : 'missing'}`}>
-                          <span className="field-label">
-                            {field.label}
-                            {field.required && <span className="required-mark">*</span>}
-                          </span>
-                          <span className="field-status">
-                            {field.detected ? (
-                              <span className="detected-badge"><CheckCircle2 size={14} /> {field.sourceColumn}</span>
-                            ) : (
-                              <span className="missing-badge"><AlertTriangle size={14} /> 未识别</span>
-                            )}
-                          </span>
+                        <div key={field.key} className={`field-mapping-row ${field.detected ? 'detected' : 'missing'}`}>
+                          <div className="field-name-col">
+                            <span className="field-label">
+                              {field.label}
+                              {field.required && <span className="required-mark">*</span>}
+                            </span>
+                          </div>
+                          <div className="field-arrow-col">
+                            <ChevronRight size={16} className="mapping-arrow" />
+                          </div>
+                          <div className="field-select-col">
+                            <select
+                              className="field-mapping-select"
+                              value={importPreview.fieldMapping[field.key] !== undefined ? importPreview.fieldMapping[field.key] : ''}
+                              onChange={(e) => handleFieldMappingChange(field.key, e.target.value)}
+                            >
+                              <option value="">-- 不映射 --</option>
+                              {importPreview.headers.map((header, index) => (
+                                <option key={index} value={index}>
+                                  {header}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
                         </div>
                       ))}
                     </div>
-                    <p className="field-hint"><span className="required-mark">*</span> 标记为必填字段</p>
+                    <p className="field-hint"><span className="required-mark">*</span> 标记为必填字段，缺少必填字段时无法导入</p>
                   </div>
 
                   {importPreview.fileDuplicates.length > 0 && (
