@@ -306,6 +306,8 @@ function App() {
   const [editingTemplate, setEditingTemplate] = useState(null);
   const [templateForm, setTemplateForm] = useState({ species: '', vaccine: '', days: '' });
   const [nextDateManual, setNextDateManual] = useState(false);
+  const [calendarDate, setCalendarDate] = useState(new Date());
+  const [selectedCalendarDay, setSelectedCalendarDay] = useState(null);
 
   function persist(next) {
     setRecords(next);
@@ -786,6 +788,85 @@ function App() {
     }, {});
   }, [filteredRecords]);
 
+  const calendarRecords = useMemo(() => {
+    return records
+      .filter((item) => !filters.query || `${item.pet}${item.ownerPhone}`.includes(filters.query))
+      .filter((item) => filters.status === '全部' || item.status === filters.status)
+      .reduce((acc, item) => {
+        const date = item.nextDate;
+        if (date) {
+          (acc[date] ||= []).push(item);
+        }
+        return acc;
+      }, {});
+  }, [records, filters]);
+
+  function getCalendarDays(year, month) {
+    const firstDay = new Date(year, month, 1);
+    const lastDay = new Date(year, month + 1, 0);
+    const startDay = firstDay.getDay();
+    const daysInMonth = lastDay.getDate();
+    const days = [];
+    for (let i = 0; i < startDay; i++) {
+      const d = new Date(year, month, -startDay + i + 1);
+      days.push({
+        date: d.toISOString().slice(0, 10),
+        day: d.getDate(),
+        isCurrentMonth: false,
+      });
+    }
+    for (let i = 1; i <= daysInMonth; i++) {
+      const d = new Date(year, month, i);
+      days.push({
+        date: d.toISOString().slice(0, 10),
+        day: i,
+        isCurrentMonth: true,
+      });
+    }
+    const remaining = 42 - days.length;
+    for (let i = 1; i <= remaining; i++) {
+      const d = new Date(year, month + 1, i);
+      days.push({
+        date: d.toISOString().slice(0, 10),
+        day: i,
+        isCurrentMonth: false,
+      });
+    }
+    return days;
+  }
+
+  const calendarDays = useMemo(() => {
+    const year = calendarDate.getFullYear();
+    const month = calendarDate.getMonth();
+    return getCalendarDays(year, month);
+  }, [calendarDate]);
+
+  function getDayStats(date) {
+    const items = calendarRecords[date] || [];
+    return {
+      total: items.length,
+      pending: items.filter(i => i.status === '待联系').length,
+      contacted: items.filter(i => i.status === '已联系').length,
+      done: items.filter(i => i.status === '已接种').length,
+      items,
+    };
+  }
+
+  function prevMonth() {
+    setCalendarDate(new Date(calendarDate.getFullYear(), calendarDate.getMonth() - 1, 1));
+    setSelectedCalendarDay(null);
+  }
+
+  function nextMonth() {
+    setCalendarDate(new Date(calendarDate.getFullYear(), calendarDate.getMonth() + 1, 1));
+    setSelectedCalendarDay(null);
+  }
+
+  function goToToday() {
+    setCalendarDate(new Date());
+    setSelectedCalendarDay(today);
+  }
+
   const directory = useMemo(() => {
     return records.reduce((acc, item) => {
       const key = item.issue || '未分类';
@@ -868,21 +949,28 @@ function App() {
       <div className="view-tabs">
         <button
           className={`view-tab ${currentView === 'records' ? 'active' : ''}`}
-          onClick={() => { setCurrentView('records'); setSelectedOwner(null); }}
+          onClick={() => { setCurrentView('records'); setSelectedOwner(null); setSelectedCalendarDay(null); }}
         >
           <ClipboardList size={16} />
           记录管理
         </button>
         <button
+          className={`view-tab ${currentView === 'calendar' ? 'active' : ''}`}
+          onClick={() => { setCurrentView('calendar'); setSelectedOwner(null); setSelected(null); }}
+        >
+          <CalendarDays size={16} />
+          月历提醒
+        </button>
+        <button
           className={`view-tab ${currentView === 'owners' ? 'active' : ''}`}
-          onClick={() => { setCurrentView('owners'); setSelected(null); }}
+          onClick={() => { setCurrentView('owners'); setSelected(null); setSelectedCalendarDay(null); }}
         >
           <Users size={16} />
           主人档案
         </button>
         <button
           className={`view-tab ${currentView === 'templates' ? 'active' : ''}`}
-          onClick={() => { setCurrentView('templates'); setSelected(null); setSelectedOwner(null); }}
+          onClick={() => { setCurrentView('templates'); setSelected(null); setSelectedOwner(null); setSelectedCalendarDay(null); }}
         >
           <Settings size={16} />
           复种周期模板
@@ -895,7 +983,31 @@ function App() {
             <span>{metric.label}</span>
             <strong>{metric.value}</strong>
           </article>
-        )) : (
+        )) : currentView === 'calendar' ? (
+          <>
+            <article className="metric">
+              <span>本月提醒</span>
+              <strong>{Object.entries(calendarRecords).filter(([date]) => {
+                const d = new Date(date);
+                return d.getFullYear() === calendarDate.getFullYear() && d.getMonth() === calendarDate.getMonth();
+              }).reduce((sum, [, items]) => sum + items.length, 0)}</strong>
+            </article>
+            <article className="metric">
+              <span>本月待联系</span>
+              <strong>{Object.entries(calendarRecords).filter(([date]) => {
+                const d = new Date(date);
+                return d.getFullYear() === calendarDate.getFullYear() && d.getMonth() === calendarDate.getMonth();
+              }).reduce((sum, [, items]) => sum + items.filter(i => i.status === '待联系').length, 0)}</strong>
+            </article>
+            <article className="metric">
+              <span>本月已接种</span>
+              <strong>{Object.entries(calendarRecords).filter(([date]) => {
+                const d = new Date(date);
+                return d.getFullYear() === calendarDate.getFullYear() && d.getMonth() === calendarDate.getMonth();
+              }).reduce((sum, [, items]) => sum + items.filter(i => i.status === '已接种').length, 0)}</strong>
+            </article>
+          </>
+        ) : (
           <>
             <article className="metric">
               <span>主人数量</span>
@@ -1337,6 +1449,157 @@ function App() {
             </button>
           </div>
         </section>
+      )}
+
+      {currentView === 'calendar' && (
+        <>
+          <section className="panel calendar-toolbar-panel">
+            <div className="calendar-toolbar">
+              <div className="calendar-nav">
+                <button type="button" className="calendar-nav-btn" onClick={prevMonth}>
+                  <ChevronRight size={20} style={{ transform: 'rotate(180deg)' }} />
+                </button>
+                <h2 className="calendar-title">
+                  {calendarDate.getFullYear()}年{calendarDate.getMonth() + 1}月
+                </h2>
+                <button type="button" className="calendar-nav-btn" onClick={nextMonth}>
+                  <ChevronRight size={20} />
+                </button>
+                <button type="button" className="today-btn" onClick={goToToday}>
+                  今天
+                </button>
+              </div>
+              <div className="calendar-filter">
+                <div className="search">
+                  <Search size={16} />
+                  <input value={filters.query} onChange={(event) => setFilters({ ...filters, query: event.target.value })} placeholder="搜索宠物/主人" />
+                </div>
+                <select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}>
+                  <option>全部</option>
+                  {appConfig.statuses.map((status) => <option key={status}>{status}</option>)}
+                </select>
+              </div>
+            </div>
+            <div className="calendar-legend">
+              <span className="legend-item">
+                <span className="legend-dot legend-pending"></span>
+                待联系
+              </span>
+              <span className="legend-item">
+                <span className="legend-dot legend-contacted"></span>
+                已联系
+              </span>
+              <span className="legend-item">
+                <span className="legend-dot legend-done"></span>
+                已接种
+              </span>
+            </div>
+          </section>
+
+          <section className="calendar-main">
+            <div className="panel calendar-panel">
+              <div className="calendar-weekdays">
+                {['日', '一', '二', '三', '四', '五', '六'].map((day) => (
+                  <div key={day} className="calendar-weekday">{day}</div>
+                ))}
+              </div>
+              <div className="calendar-grid">
+                {calendarDays.map((day) => {
+                  const stats = getDayStats(day.date);
+                  const isToday = day.date === today;
+                  const isSelected = day.date === selectedCalendarDay;
+                  const dayIsOverdue = isOverdue(day.date) && stats.pending > 0;
+                  return (
+                    <div
+                      key={day.date}
+                      className={`calendar-day ${!day.isCurrentMonth ? 'other-month' : ''} ${isToday ? 'is-today' : ''} ${isSelected ? 'is-selected' : ''} ${dayIsOverdue ? 'is-overdue' : ''} ${stats.total > 0 ? 'has-records' : ''}`}
+                      onClick={() => stats.total > 0 ? setSelectedCalendarDay(day.date) : null}
+                    >
+                      <div className="calendar-day-header">
+                        <span className="calendar-day-number">{day.day}</span>
+                        {stats.total > 0 && (
+                          <span className="calendar-day-total">{stats.total}</span>
+                        )}
+                      </div>
+                      {stats.total > 0 && (
+                        <div className="calendar-day-stats">
+                          {stats.pending > 0 && (
+                            <span className="day-stat stat-pending">{stats.pending}</span>
+                          )}
+                          {stats.contacted > 0 && (
+                            <span className="day-stat stat-contacted">{stats.contacted}</span>
+                          )}
+                          {stats.done > 0 && (
+                            <span className="day-stat stat-done">{stats.done}</span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {selectedCalendarDay && (
+              <aside className="panel calendar-day-detail">
+                <div className="panel-title">
+                  <CalendarDays size={18} />
+                  <h2>{selectedCalendarDay}</h2>
+                  <button
+                    type="button"
+                    className="close-detail-btn"
+                    onClick={() => setSelectedCalendarDay(null)}
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+                <div className="day-detail-stats">
+                  <div className="day-stat-item">
+                    <span className="day-stat-label">待联系</span>
+                    <span className="day-stat-value stat-pending">{getDayStats(selectedCalendarDay).pending}</span>
+                  </div>
+                  <div className="day-stat-item">
+                    <span className="day-stat-label">已联系</span>
+                    <span className="day-stat-value stat-contacted">{getDayStats(selectedCalendarDay).contacted}</span>
+                  </div>
+                  <div className="day-stat-item">
+                    <span className="day-stat-label">已接种</span>
+                    <span className="day-stat-value stat-done">{getDayStats(selectedCalendarDay).done}</span>
+                  </div>
+                </div>
+                <div className="day-records-list">
+                  {getDayStats(selectedCalendarDay).items.length === 0 ? (
+                    <p className="empty-group">当天暂无提醒记录</p>
+                  ) : (
+                    getDayStats(selectedCalendarDay).items.map((item) => (
+                      <article
+                        className={'day-record ' + (item.conflict || hasOverlap(item, records) ? 'conflict' : '')}
+                        key={item.id}
+                        onClick={() => { setSelected(item); setCurrentView('records'); }}
+                      >
+                        <div className="day-record-head">
+                          <div>
+                            <h3>{item.pet}</h3>
+                            <p>{`${item.species} · ${item.vaccine} · ${item.ownerPhone}`}</p>
+                          </div>
+                          <span className={'status ' + statusClass(item.status)}>{item.status}</span>
+                        </div>
+                        <p className="day-record-detail">{`上次接种：${item.lastDate || '未记录'}`}</p>
+                        {(item.conflict || hasOverlap(item, records)) && <div className="warning"><AlertTriangle size={15} />发现冲突</div>}
+                        <div className="day-record-actions" onClick={(event) => event.stopPropagation()}>
+                          {appConfig.statuses.map((status) => (
+                            <button key={status} type="button" onClick={() => updateStatus(item.id, status)}>{status}</button>
+                          ))}
+                          <button className="ghost-danger" type="button" onClick={() => removeRecord(item.id)}><Trash2 size={14} /></button>
+                        </div>
+                      </article>
+                    ))
+                  )}
+                </div>
+              </aside>
+            )}
+          </section>
+        </>
       )}
 
       {currentView === 'records' && (
