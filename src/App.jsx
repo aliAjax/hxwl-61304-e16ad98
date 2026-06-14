@@ -368,15 +368,18 @@ function App() {
 
   function addRecord(event) {
     event.preventDefault();
-    const autoNext = calcNextDate(form.lastDate, form.species, form.vaccine, templates);
-    const finalNextDate = form.nextDate || autoNext;
+    const formData = new FormData(event.currentTarget);
+    const submittedValues = Object.fromEntries(formData.entries());
+    const submittedRecord = { ...form, ...submittedValues };
+    const autoNext = calcNextDate(submittedRecord.lastDate, submittedRecord.species, submittedRecord.vaccine, templates);
+    const finalNextDate = submittedRecord.nextDate || autoNext;
     const nextRecord = {
       id: uid(),
-      ...form,
+      ...submittedRecord,
       nextDate: finalNextDate,
-      status: form.status || appConfig.primaryStatus,
+      status: submittedRecord.status || appConfig.primaryStatus,
       createdAt: new Date().toISOString(),
-      timeline: [{ status: form.status || appConfig.primaryStatus, at: today, by: '录入' }],
+      timeline: [{ status: submittedRecord.status || appConfig.primaryStatus, at: today, by: '录入' }],
       notes: []
     };
 
@@ -1367,9 +1370,6 @@ function App() {
                           const newAutoNext = calcNextDate(newLastDate, newSpecies, newVaccine, templates);
                           if (!nextDateManual) {
                             next.nextDate = newAutoNext || '';
-                          } else if (newAutoNext) {
-                            next.nextDate = newAutoNext;
-                            setNextDateManual(false);
                           }
                           setForm(next);
                         }}>
@@ -1379,6 +1379,7 @@ function App() {
                         <input
                           type={field.type}
                           value={form[field.key] || ''}
+                          name={field.key}
                           onChange={(event) => {
                             const val = event.target.value;
                             const next = { ...form, [field.key]: val };
@@ -1397,6 +1398,7 @@ function App() {
                         <input
                           type={field.type}
                           value={form[field.key] || ''}
+                          name={field.key}
                           onChange={(event) => {
                             setForm({ ...form, nextDate: event.target.value });
                             setNextDateManual(!!event.target.value && event.target.value !== autoNext);
@@ -1407,6 +1409,7 @@ function App() {
                         <input
                           type={field.type}
                           value={form[field.key] || ''}
+                          name={field.key}
                           onChange={(event) => setForm({ ...form, [field.key]: event.target.value })}
                           placeholder={field.placeholder}
                         />
