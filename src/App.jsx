@@ -1114,7 +1114,7 @@ function App() {
           data = JSON.parse(text);
         } catch (parseError) {
           const parseHint = getExpectedFormatHint(
-            `❌ JSON解析失败：文件内容不是有效的JSON格式\\n` +
+            `❌ JSON解析失败：文件内容不是有效的JSON格式\n` +
             `错误详情：${parseError instanceof Error ? parseError.message.replace(/^JSON\.parse: /, '') : String(parseError)}`
           );
           setRestoreError({ type: 'format', message: parseHint });
