@@ -191,13 +191,27 @@ function calcNextDate(lastDate, species, vaccine, templates) {
   if (!lastDate) return '';
   const tpl = templates.find(t => t.species === species && t.vaccine === vaccine);
   if (!tpl) return '';
-  const d = new Date(lastDate);
-  if (isNaN(d.getTime())) return '';
-  d.setDate(d.getDate() + tpl.days);
-  return d.toISOString().slice(0, 10);
+  const [y, m, d] = lastDate.split('-').map(Number);
+  const date = new Date(y, (m || 1) - 1, d || 1);
+  if (isNaN(date.getTime())) return '';
+  date.setDate(date.getDate() + tpl.days);
+  return formatLocalDate(date);
 }
 
-const today = new Date().toISOString().slice(0, 10);
+function formatLocalDate(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function parseLocalDate(dateText) {
+  if (!dateText) return new Date(NaN);
+  const [y, m, d] = dateText.split('-').map(Number);
+  return new Date(y, (m || 1) - 1, d || 1, 0, 0, 0, 0);
+}
+
+const today = formatLocalDate(new Date());
 
 function uid() {
   return Math.random().toString(36).slice(2, 10);
@@ -231,16 +245,16 @@ function money(value) {
 
 function inNextDays(dateText, days) {
   if (!dateText) return false;
-  const date = new Date(dateText);
-  const now = new Date(today);
+  const date = parseLocalDate(dateText);
+  const now = parseLocalDate(today);
   const diff = (date.getTime() - now.getTime()) / 86400000;
   return diff >= 0 && diff <= days;
 }
 
 function isOverdue(dateText) {
   if (!dateText) return false;
-  const date = new Date(dateText);
-  const now = new Date(today);
+  const date = parseLocalDate(dateText);
+  const now = parseLocalDate(today);
   return date.getTime() < now.getTime();
 }
 
@@ -251,16 +265,16 @@ function isToday(dateText) {
 
 function isWithin7DaysExcludingToday(dateText) {
   if (!dateText) return false;
-  const date = new Date(dateText);
-  const now = new Date(today);
+  const date = parseLocalDate(dateText);
+  const now = parseLocalDate(today);
   const diff = (date.getTime() - now.getTime()) / 86400000;
   return diff > 0 && diff <= 7;
 }
 
 function daysDiff(dateText) {
   if (!dateText) return 0;
-  const date = new Date(dateText);
-  const now = new Date(today);
+  const date = parseLocalDate(dateText);
+  const now = parseLocalDate(today);
   return Math.round((date.getTime() - now.getTime()) / 86400000);
 }
 
@@ -770,13 +784,13 @@ function App() {
     return {
       overdue: records
         .filter((item) => isOverdue(item.nextDate))
-        .sort((a, b) => new Date(a.nextDate) - new Date(b.nextDate)),
+        .sort((a, b) => parseLocalDate(a.nextDate) - parseLocalDate(b.nextDate)),
       today: records
         .filter((item) => isToday(item.nextDate))
-        .sort((a, b) => new Date(a.nextDate) - new Date(b.nextDate)),
+        .sort((a, b) => parseLocalDate(a.nextDate) - parseLocalDate(b.nextDate)),
       upcoming: records
         .filter((item) => isWithin7DaysExcludingToday(item.nextDate))
-        .sort((a, b) => new Date(a.nextDate) - new Date(b.nextDate)),
+        .sort((a, b) => parseLocalDate(a.nextDate) - parseLocalDate(b.nextDate)),
     };
   }, [records]);
 
@@ -810,7 +824,7 @@ function App() {
     for (let i = 0; i < startDay; i++) {
       const d = new Date(year, month, -startDay + i + 1);
       days.push({
-        date: d.toISOString().slice(0, 10),
+        date: formatLocalDate(d),
         day: d.getDate(),
         isCurrentMonth: false,
       });
@@ -818,7 +832,7 @@ function App() {
     for (let i = 1; i <= daysInMonth; i++) {
       const d = new Date(year, month, i);
       days.push({
-        date: d.toISOString().slice(0, 10),
+        date: formatLocalDate(d),
         day: i,
         isCurrentMonth: true,
       });
@@ -827,7 +841,7 @@ function App() {
     for (let i = 1; i <= remaining; i++) {
       const d = new Date(year, month + 1, i);
       days.push({
-        date: d.toISOString().slice(0, 10),
+        date: formatLocalDate(d),
         day: i,
         isCurrentMonth: false,
       });
