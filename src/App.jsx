@@ -877,6 +877,8 @@ function App() {
   });
   const [groupMode, setGroupMode] = useState(initialStoreState.storeData.groupMode);
   const [nextDateManual, setNextDateManual] = useState(false);
+  const [recalcNotice, setRecalcNotice] = useState(null);
+  const recalcTimerRef = useRef(null);
   const [calendarDate, setCalendarDate] = useState(new Date());
   const [selectedCalendarDay, setSelectedCalendarDay] = useState(null);
   const [showStoreModal, setShowStoreModal] = useState(false);
@@ -1289,6 +1291,48 @@ function App() {
     persist(next);
     const count = next.filter((r, i) => r.nextDate !== records[i].nextDate).length;
     alert(`已修复 ${count} 条记录的下次提醒日期`);
+  }
+
+  function handleRecalcByTemplate() {
+    if (recalcTimerRef.current) {
+      clearTimeout(recalcTimerRef.current);
+      recalcTimerRef.current = null;
+    }
+
+    if (!form.lastDate) {
+      setRecalcNotice({ type: 'warning', message: '请先选择上次接种日期' });
+      recalcTimerRef.current = setTimeout(() => setRecalcNotice(null), 3000);
+      return;
+    }
+    if (!form.species) {
+      setRecalcNotice({ type: 'warning', message: '请先选择物种' });
+      recalcTimerRef.current = setTimeout(() => setRecalcNotice(null), 3000);
+      return;
+    }
+    if (!form.vaccine) {
+      setRecalcNotice({ type: 'warning', message: '请先选择疫苗类型' });
+      recalcTimerRef.current = setTimeout(() => setRecalcNotice(null), 3000);
+      return;
+    }
+
+    const matched = templates.find(t => t.species === form.species && t.vaccine === form.vaccine);
+    const autoNext = calcNextDate(form.lastDate, form.species, form.vaccine, templates);
+
+    if (matched && autoNext) {
+      setForm({ ...form, nextDate: autoNext });
+      setNextDateManual(false);
+      setRecalcNotice({
+        type: 'success',
+        message: `已按模板重新计算：${form.species} + ${form.vaccine}（${matched.days}天）→ ${autoNext}`
+      });
+    } else {
+      setRecalcNotice({
+        type: 'warning',
+        message: `未找到匹配模板（物种：${form.species}，疫苗：${form.vaccine}），请在"复种周期模板"页面添加配置，或手动填写下次提醒日期`
+      });
+    }
+
+    recalcTimerRef.current = setTimeout(() => setRecalcNotice(null), 5000);
   }
 
   function addRecord(event) {
@@ -2411,6 +2455,15 @@ function App() {
     setOwnerPreferredTimeDraft('');
   }, [selectedOwner]);
 
+  useEffect(() => {
+    return () => {
+      if (recalcTimerRef.current) {
+        clearTimeout(recalcTimerRef.current);
+        recalcTimerRef.current = null;
+      }
+    };
+  }, []);
+
   function jumpToRecord(recordId) {
     const record = records.find((r) => r.id === recordId);
     if (record) {
@@ -3464,16 +3517,27 @@ function App() {
                           placeholder={field.placeholder}
                         />
                       ) : field.key === 'nextDate' ? (
-                        <input
-                          type={field.type}
-                          value={form[field.key] || ''}
-                          name={field.key}
-                          onChange={(event) => {
-                            setForm({ ...form, nextDate: event.target.value });
-                            setNextDateManual(!!event.target.value && event.target.value !== autoNext);
-                          }}
-                          placeholder={field.placeholder}
-                        />
+                        <div className="next-date-input-group">
+                          <input
+                            type={field.type}
+                            value={form[field.key] || ''}
+                            name={field.key}
+                            onChange={(event) => {
+                              setForm({ ...form, nextDate: event.target.value });
+                              setNextDateManual(!!event.target.value && event.target.value !== autoNext);
+                            }}
+                            placeholder={field.placeholder}
+                          />
+                          <button
+                            type="button"
+                            className="recalc-btn"
+                            onClick={handleRecalcByTemplate}
+                            title="根据物种、疫苗和上次接种日期按模板重新计算下次提醒日期"
+                          >
+                            <RotateCcw size={14} />
+                            按模板重新计算
+                          </button>
+                        </div>
                       ) : (
                         <input
                           type={field.type}
@@ -3498,6 +3562,25 @@ function App() {
                   </select>
                 </label>
               </div>
+              {recalcNotice && (
+                <div className={`recalc-notice recalc-notice-${recalcNotice.type}`}>
+                  {recalcNotice.type === 'success' ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
+                  <span>{recalcNotice.message}</span>
+                  <button
+                    type="button"
+                    className="recalc-notice-close"
+                    onClick={() => {
+                      setRecalcNotice(null);
+                      if (recalcTimerRef.current) {
+                        clearTimeout(recalcTimerRef.current);
+                        recalcTimerRef.current = null;
+                      }
+                    }}
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              )}
               <button className="primary" type="submit"><Plus size={18} />新增</button>
               <button type="button" className="import-btn" onClick={() => setShowImportModal(true)}><Upload size={18} />批量导入CSV</button>
               <button type="button" className="import-btn" onClick={() => { setShowBackupRestoreModal(true); setBackupRestoreStep('main'); }}><Save size={18} />数据备份与恢复</button>
