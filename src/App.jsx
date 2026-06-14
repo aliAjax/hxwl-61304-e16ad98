@@ -1026,6 +1026,7 @@ function App() {
           setRules(newStoreData.rules || defaultRules.map(r => ({ ...r })));
           setFilters(newStoreData.filters || { query: '', status: '全部' });
           setGroupMode(newStoreData.groupMode || 'auto');
+          setOwnerInfo(newStoreData.ownerInfo || {});
           setSelected(null);
           setSelectedOwner(null);
         }
