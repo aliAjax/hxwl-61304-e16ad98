@@ -1594,7 +1594,12 @@ function App() {
           } else if (isToday(item.nextDate)) {
             key = '今日到期';
           } else {
-            key = '即将到期';
+            const adv = getAdvanceDays(item.vaccine, rules);
+            if (isWithinNextDays(item.nextDate, adv)) {
+              key = '即将到期';
+            } else {
+              key = '未到提醒期';
+            }
           }
         } else {
           key = item[appConfig.dateKey] || item.date || item.enrollDate || '未排期';
@@ -1624,7 +1629,12 @@ function App() {
         } else if (isToday(item.nextDate)) {
           key = '今日到期';
         } else {
-          key = '即将到期';
+          const adv = getAdvanceDays(item.vaccine, rules);
+          if (isWithinNextDays(item.nextDate, adv)) {
+            key = '即将到期';
+          } else {
+            key = '未到提醒期';
+          }
         }
         (acc[key] ||= []).push(item);
         return acc;
