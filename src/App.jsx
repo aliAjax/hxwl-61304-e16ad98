@@ -1,5 +1,5 @@
 import { useMemo, useState, useRef } from 'react';
-import { Syringe, Plus, Search, Trash2, RotateCcw, CheckCircle2, AlertTriangle, ClipboardList, CalendarDays, PhoneCall, Clock, AlertCircle, CalendarCheck, MessageSquareText, X, User, Calendar, Upload, FileText, AlertOctagon, CheckCheck, Info, Users, PawPrint, ArrowLeft, ChevronRight, Settings, Save, Edit3, Zap, Filter, PlusCircle, MinusCircle } from 'lucide-react';
+import { Syringe, Plus, Search, Trash2, RotateCcw, CheckCircle2, AlertTriangle, ClipboardList, CalendarDays, PhoneCall, Clock, AlertCircle, CalendarCheck, MessageSquareText, X, User, Calendar, Upload, FileText, AlertOctagon, CheckCheck, Info, Users, PawPrint, ArrowLeft, ChevronRight, Settings, Save, Edit3, Zap, Filter, PlusCircle, MinusCircle, Building2, Copy, Download, MoreHorizontal } from 'lucide-react';
 import './App.css';
 
 const appConfig = {
@@ -376,6 +376,349 @@ function withIds(items) {
   }));
 }
 
+const STORES_META_KEY = appConfig.storage + '-stores-meta';
+const STORE_DATA_KEY_PREFIX = appConfig.storage + '-store-';
+const STORE_SCHEMA_VERSION = 1;
+
+function getStoreMetaStorageKey() {
+  return STORES_META_KEY;
+}
+
+function getStoreDataKey(storeId) {
+  return STORE_DATA_KEY_PREFIX + storeId;
+}
+
+function loadStoresMeta() {
+  const raw = localStorage.getItem(STORES_META_KEY);
+  if (raw) {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function persistStoresMeta(meta) {
+  localStorage.setItem(STORES_META_KEY, JSON.stringify(meta));
+}
+
+function loadStoreData(storeId) {
+  const key = getStoreDataKey(storeId);
+  const raw = localStorage.getItem(key);
+  if (raw) {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function persistStoreData(storeId, data) {
+  const key = getStoreDataKey(storeId);
+  localStorage.setItem(key, JSON.stringify(data));
+}
+
+function deleteStoreData(storeId) {
+  const key = getStoreDataKey(storeId);
+  localStorage.removeItem(key);
+}
+
+function createDefaultStoreData() {
+  return {
+    records: withIds(appConfig.seed),
+    templates: [...defaultTemplates],
+    rules: defaultRules.map(r => ({ ...r, overdueLevels: (r.overdueLevels || []).map(ol => ({ ...ol })) })),
+    filters: { query: '', status: '全部' },
+    groupMode: 'auto',
+    schemaVersion: STORE_SCHEMA_VERSION
+  };
+}
+
+function migrateFromSingleStore() {
+  const hasOldRecords = localStorage.getItem(appConfig.storage) !== null;
+  const hasOldTemplates = localStorage.getItem(TEMPLATE_STORAGE_KEY) !== null;
+  const hasOldRules = localStorage.getItem(RULES_STORAGE_KEY) !== null;
+
+  if (!hasOldRecords && !hasOldTemplates && !hasOldRules) {
+    return null;
+  }
+
+  let records = [];
+  try {
+    const raw = localStorage.getItem(appConfig.storage);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      const { records: migrated, hasChanges } = migrateRecordsIfNeeded(parsed);
+      records = migrated;
+      if (hasChanges) {
+        localStorage.setItem(appConfig.storage, JSON.stringify(records));
+      }
+    }
+  } catch {
+    records = withIds(appConfig.seed);
+  }
+
+  let templates = [...defaultTemplates];
+  try {
+    const raw = localStorage.getItem(TEMPLATE_STORAGE_KEY);
+    if (raw) {
+      templates = JSON.parse(raw);
+    }
+  } catch {}
+
+  let rules = defaultRules.map(r => ({ ...r, overdueLevels: (r.overdueLevels || []).map(ol => ({ ...ol })) }));
+  try {
+    const raw = localStorage.getItem(RULES_STORAGE_KEY);
+    if (raw) {
+      rules = JSON.parse(raw);
+    }
+  } catch {}
+
+  const storeId = 'store-default';
+  const storeData = {
+    records,
+    templates,
+    rules,
+    filters: { query: '', status: '全部' },
+    groupMode: 'auto',
+    schemaVersion: STORE_SCHEMA_VERSION
+  };
+
+  const meta = {
+    version: 1,
+    currentStoreId: storeId,
+    stores: [
+      {
+        id: storeId,
+        name: '默认门店',
+        createdAt: new Date().toISOString(),
+        isDefault: true,
+        migrated: true
+      }
+    ]
+  };
+
+  persistStoreData(storeId, storeData);
+  persistStoresMeta(meta);
+
+  return { meta, storeData, storeId };
+}
+
+function initStores() {
+  let meta = loadStoresMeta();
+
+  if (meta && meta.stores && meta.stores.length > 0) {
+    const currentStoreId = meta.currentStoreId || meta.stores[0].id;
+    let storeData = loadStoreData(currentStoreId);
+    if (!storeData) {
+      storeData = createDefaultStoreData();
+      persistStoreData(currentStoreId, storeData);
+    }
+    if (!meta.currentStoreId) {
+      meta.currentStoreId = currentStoreId;
+      persistStoresMeta(meta);
+    }
+    return { meta, storeData, storeId: currentStoreId };
+  }
+
+  const migrated = migrateFromSingleStore();
+  if (migrated) {
+    return migrated;
+  }
+
+  const storeId = 'store-default';
+  const storeData = createDefaultStoreData();
+  meta = {
+    version: 1,
+    currentStoreId: storeId,
+    stores: [
+      {
+        id: storeId,
+        name: '默认门店',
+        createdAt: new Date().toISOString(),
+        isDefault: true
+      }
+    ]
+  };
+
+  persistStoreData(storeId, storeData);
+  persistStoresMeta(meta);
+
+  return { meta, storeData, storeId };
+}
+
+function createStore(name, templateStoreId) {
+  const meta = loadStoresMeta();
+  if (!meta) return null;
+
+  const storeId = 'store-' + uid();
+  let storeData;
+
+  if (templateStoreId) {
+    storeData = loadStoreData(templateStoreId);
+    if (storeData) {
+      storeData = {
+        ...storeData,
+        records: storeData.records.map(r => ({ ...r, id: uid(), timeline: [...(r.timeline || [])], notes: [...(r.notes || [])] })),
+        templates: (storeData.templates || []).map(t => ({ ...t })),
+        rules: (storeData.rules || []).map(r => ({ ...r, overdueLevels: (r.overdueLevels || []).map(ol => ({ ...ol })) })),
+        filters: { query: '', status: '全部' },
+        groupMode: storeData.groupMode || 'auto'
+      };
+    } else {
+      storeData = createDefaultStoreData();
+    }
+  } else {
+    storeData = createDefaultStoreData();
+  }
+
+  persistStoreData(storeId, storeData);
+
+  const newStore = {
+    id: storeId,
+    name: name.trim() || '新门店',
+    createdAt: new Date().toISOString(),
+    isDefault: false
+  };
+
+  meta.stores.push(newStore);
+  meta.currentStoreId = storeId;
+  persistStoresMeta(meta);
+
+  return { store: newStore, storeData };
+}
+
+function renameStore(storeId, newName) {
+  const meta = loadStoresMeta();
+  if (!meta || !meta.stores) return null;
+
+  const storeIndex = meta.stores.findIndex(s => s.id === storeId);
+  if (storeIndex === -1) return null;
+
+  meta.stores[storeIndex].name = newName.trim() || '未命名门店';
+  persistStoresMeta(meta);
+
+  return meta.stores[storeIndex];
+}
+
+function deleteStore(storeId) {
+  const meta = loadStoresMeta();
+  if (!meta || !meta.stores || meta.stores.length <= 1) return false;
+
+  const storeIndex = meta.stores.findIndex(s => s.id === storeId);
+  if (storeIndex === -1) return false;
+
+  const store = meta.stores[storeIndex];
+  if (store.isDefault) return false;
+
+  meta.stores.splice(storeIndex, 1);
+  deleteStoreData(storeId);
+
+  if (meta.currentStoreId === storeId) {
+    meta.currentStoreId = meta.stores[0].id;
+  }
+
+  persistStoresMeta(meta);
+  return true;
+}
+
+function switchStore(storeId) {
+  const meta = loadStoresMeta();
+  if (!meta || !meta.stores) return null;
+
+  const store = meta.stores.find(s => s.id === storeId);
+  if (!store) return null;
+
+  meta.currentStoreId = storeId;
+  persistStoresMeta(meta);
+
+  const storeData = loadStoreData(storeId);
+  return { store, storeData };
+}
+
+function exportStoreData(storeId, storeName) {
+  const storeData = loadStoreData(storeId);
+  if (!storeData) return null;
+
+  const exportData = {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    appId: appConfig.id,
+    storeName: storeName,
+    storeId: storeId,
+    schemaVersion: STORE_SCHEMA_VERSION,
+    recordCount: storeData.records?.length || 0,
+    data: storeData
+  };
+
+  return exportData;
+}
+
+function validateImportStoreData(rawData) {
+  const errors = [];
+  const warnings = [];
+
+  if (!rawData || typeof rawData !== 'object') {
+    errors.push('文件格式错误：不是有效的JSON对象');
+    return { valid: false, errors, warnings, data: null };
+  }
+
+  let storeData = null;
+
+  if (rawData.data && typeof rawData.data === 'object') {
+    storeData = rawData.data;
+  } else if (rawData.records !== undefined || rawData.templates !== undefined) {
+    storeData = rawData;
+  } else if (rawData.appId && rawData.records !== undefined) {
+    storeData = {
+      records: rawData.records,
+      templates: [...defaultTemplates],
+      rules: defaultRules.map(r => ({ ...r })),
+      filters: { query: '', status: '全部' },
+      groupMode: 'auto'
+    };
+    warnings.push('检测到旧版数据格式，已自动转换为门店数据');
+  }
+
+  if (!storeData) {
+    errors.push('未找到有效的门店数据');
+    return { valid: false, errors, warnings, data: null };
+  }
+
+  if (!Array.isArray(storeData.records)) {
+    errors.push('数据格式错误：records字段应为数组');
+    return { valid: false, errors, warnings, data: null };
+  }
+
+  const normalizedRecords = storeData.records.map(r => {
+    const { record: migrated } = migrateRecord(r || {});
+    return migrated;
+  });
+
+  const result = {
+    records: normalizedRecords,
+    templates: Array.isArray(storeData.templates) ? storeData.templates : [...defaultTemplates],
+    rules: Array.isArray(storeData.rules) ? storeData.rules : defaultRules.map(r => ({ ...r })),
+    filters: storeData.filters || { query: '', status: '全部' },
+    groupMode: storeData.groupMode || 'auto',
+    schemaVersion: STORE_SCHEMA_VERSION
+  };
+
+  return { valid: true, errors, warnings, data: result };
+}
+
+function importStoreData(storeId, importData) {
+  const { valid, data } = validateImportStoreData(importData);
+  if (!valid || !data) return false;
+
+  persistStoreData(storeId, data);
+  return true;
+}
+
 function loadRecords() {
   const raw = localStorage.getItem(appConfig.storage);
   if (raw) {
@@ -477,9 +820,12 @@ function statusClass(status) {
 }
 
 function App() {
-  const [records, setRecords] = useState(loadRecords);
+  const initialStoreState = useMemo(() => initStores(), []);
+  const [stores, setStores] = useState(initialStoreState.meta.stores);
+  const [currentStoreId, setCurrentStoreId] = useState(initialStoreState.storeId);
+  const [records, setRecords] = useState(initialStoreState.storeData.records);
   const [form, setForm] = useState(appConfig.defaultValues);
-  const [filters, setFilters] = useState({ query: '', status: '全部' });
+  const [filters, setFilters] = useState(initialStoreState.storeData.filters);
   const [selected, setSelected] = useState(null);
   const [newNoteContent, setNewNoteContent] = useState('');
   const [newNoteOperator, setNewNoteOperator] = useState('');
@@ -496,10 +842,10 @@ function App() {
   const [currentView, setCurrentView] = useState('records');
   const [ownerSearch, setOwnerSearch] = useState('');
   const [selectedOwner, setSelectedOwner] = useState(null);
-  const [templates, setTemplates] = useState(loadTemplates);
+  const [templates, setTemplates] = useState(initialStoreState.storeData.templates);
   const [editingTemplate, setEditingTemplate] = useState(null);
   const [templateForm, setTemplateForm] = useState({ species: '', vaccine: '', days: '' });
-  const [rules, setRules] = useState(loadRules);
+  const [rules, setRules] = useState(initialStoreState.storeData.rules);
   const [editingRule, setEditingRule] = useState(null);
   const [ruleForm, setRuleForm] = useState({
     vaccine: '',
@@ -512,19 +858,255 @@ function App() {
     defaultStatus: '待联系',
     autoGroup: 'overdue'
   });
-  const [groupMode, setGroupMode] = useState('auto');
+  const [groupMode, setGroupMode] = useState(initialStoreState.storeData.groupMode);
   const [nextDateManual, setNextDateManual] = useState(false);
   const [calendarDate, setCalendarDate] = useState(new Date());
   const [selectedCalendarDay, setSelectedCalendarDay] = useState(null);
+  const [showStoreModal, setShowStoreModal] = useState(false);
+  const [storeModalTab, setStoreModalTab] = useState('list');
+  const [newStoreName, setNewStoreName] = useState('');
+  const [newStoreTemplateId, setNewStoreTemplateId] = useState('');
+  const [editingStoreId, setEditingStoreId] = useState(null);
+  const [editingStoreName, setEditingStoreName] = useState('');
+  const [storeImportPreview, setStoreImportPreview] = useState(null);
+  const [storeImportFile, setStoreImportFile] = useState(null);
+  const storeImportFileRef = useRef(null);
+  const [storeImportTargetId, setStoreImportTargetId] = useState('');
+
+  const currentStore = useMemo(() => {
+    return stores.find(s => s.id === currentStoreId) || stores[0] || null;
+  }, [stores, currentStoreId]);
+
+  function saveCurrentStoreData(updates = {}) {
+    const currentData = loadStoreData(currentStoreId) || createDefaultStoreData();
+    const newData = {
+      ...currentData,
+      records,
+      templates,
+      rules,
+      filters,
+      groupMode,
+      ...updates
+    };
+    persistStoreData(currentStoreId, newData);
+  }
 
   function persist(next) {
     setRecords(next);
     localStorage.setItem(appConfig.storage, JSON.stringify(next));
+    const currentData = loadStoreData(currentStoreId) || createDefaultStoreData();
+    persistStoreData(currentStoreId, { ...currentData, records: next });
   }
 
   function saveTemplates(next) {
     setTemplates(next);
     persistTemplates(next);
+    const currentData = loadStoreData(currentStoreId) || createDefaultStoreData();
+    persistStoreData(currentStoreId, { ...currentData, templates: next });
+  }
+
+  function saveFilters(next) {
+    setFilters(next);
+    const currentData = loadStoreData(currentStoreId) || createDefaultStoreData();
+    persistStoreData(currentStoreId, { ...currentData, filters: next });
+  }
+
+  function saveGroupMode(next) {
+    setGroupMode(next);
+    const currentData = loadStoreData(currentStoreId) || createDefaultStoreData();
+    persistStoreData(currentStoreId, { ...currentData, groupMode: next });
+  }
+
+  function handleSwitchStore(storeId) {
+    if (storeId === currentStoreId) return;
+
+    saveCurrentStoreData();
+
+    const result = switchStore(storeId);
+    if (result && result.storeData) {
+      setCurrentStoreId(storeId);
+      setRecords(result.storeData.records || []);
+      setTemplates(result.storeData.templates || [...defaultTemplates]);
+      setRules(result.storeData.rules || defaultRules.map(r => ({ ...r })));
+      setFilters(result.storeData.filters || { query: '', status: '全部' });
+      setGroupMode(result.storeData.groupMode || 'auto');
+      setSelected(null);
+      setSelectedOwner(null);
+      setSelectedCalendarDay(null);
+    }
+  }
+
+  function handleCreateStore() {
+    if (!newStoreName.trim()) {
+      alert('请输入门店名称');
+      return;
+    }
+
+    saveCurrentStoreData();
+
+    const result = createStore(newStoreName, newStoreTemplateId || null);
+    if (result) {
+      const meta = loadStoresMeta();
+      setStores(meta.stores);
+      setCurrentStoreId(result.store.id);
+      setRecords(result.storeData.records || []);
+      setTemplates(result.storeData.templates || [...defaultTemplates]);
+      setRules(result.storeData.rules || defaultRules.map(r => ({ ...r })));
+      setFilters(result.storeData.filters || { query: '', status: '全部' });
+      setGroupMode(result.storeData.groupMode || 'auto');
+      setSelected(null);
+      setSelectedOwner(null);
+      setNewStoreName('');
+      setNewStoreTemplateId('');
+      setShowStoreModal(false);
+      setStoreModalTab('list');
+    }
+  }
+
+  function handleRenameStore() {
+    if (!editingStoreName.trim()) {
+      alert('请输入门店名称');
+      return;
+    }
+    const updated = renameStore(editingStoreId, editingStoreName);
+    if (updated) {
+      const meta = loadStoresMeta();
+      setStores(meta.stores);
+    }
+    setEditingStoreId(null);
+    setEditingStoreName('');
+  }
+
+  function handleDeleteStore(storeId) {
+    const store = stores.find(s => s.id === storeId);
+    if (!store) return;
+    if (store.isDefault) {
+      alert('默认门店不能删除');
+      return;
+    }
+    if (!confirm(`确定要删除门店"${store.name}"吗？此操作不可恢复。`)) {
+      return;
+    }
+
+    const wasCurrent = storeId === currentStoreId;
+    const success = deleteStore(storeId);
+    if (success) {
+      const meta = loadStoresMeta();
+      setStores(meta.stores);
+
+      if (wasCurrent) {
+        const newCurrentId = meta.currentStoreId;
+        const newStoreData = loadStoreData(newCurrentId);
+        if (newStoreData) {
+          setCurrentStoreId(newCurrentId);
+          setRecords(newStoreData.records || []);
+          setTemplates(newStoreData.templates || [...defaultTemplates]);
+          setRules(newStoreData.rules || defaultRules.map(r => ({ ...r })));
+          setFilters(newStoreData.filters || { query: '', status: '全部' });
+          setGroupMode(newStoreData.groupMode || 'auto');
+          setSelected(null);
+          setSelectedOwner(null);
+        }
+      }
+    }
+  }
+
+  function handleExportStore(storeId, storeName) {
+    const exportData = exportStoreData(storeId, storeName);
+    if (!exportData) return;
+
+    const jsonStr = JSON.stringify(exportData, null, 2);
+    const blob = new Blob([jsonStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    const dateStr = formatLocalDate(new Date());
+    link.download = `${storeName}_门店数据_${dateStr}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+
+  function handleStoreImportFile(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setStoreImportFile(file);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const text = e.target.result;
+        const data = JSON.parse(text);
+        const validation = validateImportStoreData(data);
+        setStoreImportPreview({
+          fileName: file.name,
+          valid: validation.valid,
+          errors: validation.errors,
+          warnings: validation.warnings,
+          recordCount: validation.data?.records?.length || 0,
+          templateCount: validation.data?.templates?.length || 0,
+          ruleCount: validation.data?.rules?.length || 0,
+          rawData: data
+        });
+      } catch (error) {
+        setStoreImportPreview({
+          fileName: file.name,
+          valid: false,
+          errors: ['JSON解析失败，请检查文件格式'],
+          warnings: [],
+          recordCount: 0,
+          templateCount: 0,
+          ruleCount: 0,
+          rawData: null
+        });
+      }
+    };
+    reader.readAsText(file, 'UTF-8');
+  }
+
+  function handleConfirmStoreImport() {
+    if (!storeImportPreview || !storeImportPreview.valid || !storeImportTargetId) return;
+
+    const { valid, data } = validateImportStoreData(storeImportPreview.rawData);
+    if (!valid || !data) return;
+
+    persistStoreData(storeImportTargetId, data);
+
+    if (storeImportTargetId === currentStoreId) {
+      setRecords(data.records || []);
+      setTemplates(data.templates || [...defaultTemplates]);
+      setRules(data.rules || defaultRules.map(r => ({ ...r })));
+      setFilters(data.filters || { query: '', status: '全部' });
+      setGroupMode(data.groupMode || 'auto');
+      setSelected(null);
+      setSelectedOwner(null);
+    }
+
+    setShowStoreModal(false);
+    setStoreImportPreview(null);
+    setStoreImportFile(null);
+    setStoreImportTargetId('');
+    if (storeImportFileRef.current) {
+      storeImportFileRef.current.value = '';
+    }
+    alert('门店数据导入成功');
+  }
+
+  function handleCancelStoreImport() {
+    setStoreImportPreview(null);
+    setStoreImportFile(null);
+    setStoreImportTargetId('');
+    if (storeImportFileRef.current) {
+      storeImportFileRef.current.value = '';
+    }
+  }
+
+  function saveRules(next) {
+    setRules(next);
+    persistRules(next);
+    const currentData = loadStoreData(currentStoreId) || createDefaultStoreData();
+    persistStoreData(currentStoreId, { ...currentData, rules: next });
   }
 
   function addTemplate(e) {
@@ -1799,9 +2381,44 @@ function App() {
           <h1>{appConfig.title}</h1>
           <p>{appConfig.subtitle}</p>
         </div>
-        <div className="port-card">
-          <span>Local Port</span>
-          <strong>{appConfig.port}</strong>
+        <div className="store-selector-card">
+          <div className="store-current">
+            <div className="store-icon"><Building2 size={24} /></div>
+            <div className="store-info">
+              <span className="store-label">当前门店</span>
+              <strong className="store-name">{currentStore?.name || '默认门店'}</strong>
+            </div>
+            <button
+              type="button"
+              className="store-manage-btn"
+              onClick={() => { setShowStoreModal(true); setStoreModalTab('list'); }}
+              title="门店管理"
+            >
+              <Settings size={16} />
+            </button>
+          </div>
+          <div className="store-switcher">
+            {stores.map((store) => (
+              <button
+                key={store.id}
+                type="button"
+                className={`store-switch-btn ${store.id === currentStoreId ? 'active' : ''}`}
+                onClick={() => handleSwitchStore(store.id)}
+                title={store.name}
+              >
+                {store.isDefault && <span className="store-badge-default">默认</span>}
+                <span className="store-switch-name">{store.name}</span>
+              </button>
+            ))}
+            <button
+              type="button"
+              className="store-switch-btn add-store-btn"
+              onClick={() => { setShowStoreModal(true); setStoreModalTab('create'); }}
+            >
+              <Plus size={14} />
+              <span>新建门店</span>
+            </button>
+          </div>
         </div>
       </section>
 
@@ -2508,9 +3125,9 @@ function App() {
               <div className="calendar-filter">
                 <div className="search">
                   <Search size={16} />
-                  <input value={filters.query} onChange={(event) => setFilters({ ...filters, query: event.target.value })} placeholder="搜索宠物/主人" />
+                  <input value={filters.query} onChange={(event) => saveFilters({ ...filters, query: event.target.value })} placeholder="搜索宠物/主人" />
                 </div>
-                <select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}>
+                <select value={filters.status} onChange={(event) => saveFilters({ ...filters, status: event.target.value })}>
                   <option>全部</option>
                   {appConfig.statuses.map((status) => <option key={status}>{status}</option>)}
                 </select>
@@ -2742,9 +3359,9 @@ function App() {
               <div className="toolbar">
                 <div className="search">
                   <Search size={16} />
-                  <input value={filters.query} onChange={(event) => setFilters({ ...filters, query: event.target.value })} placeholder={appConfig.filters[0]?.label || '搜索'} />
+                  <input value={filters.query} onChange={(event) => saveFilters({ ...filters, query: event.target.value })} placeholder={appConfig.filters[0]?.label || '搜索'} />
                 </div>
-                <select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}>
+                <select value={filters.status} onChange={(event) => saveFilters({ ...filters, status: event.target.value })}>
                   <option>全部</option>
                   {appConfig.statuses.map((status) => <option key={status}>{status}</option>)}
                 </select>
@@ -2786,11 +3403,11 @@ function App() {
                 <div className="group-mode-selector">
                   <Filter size={14} />
                   <span>分组方式：</span>
-                  <button type="button" className={`group-mode-btn ${groupMode === 'auto' ? 'active' : ''}`} onClick={() => setGroupMode('auto')}>按规则引擎</button>
-                  <button type="button" className={`group-mode-btn ${groupMode === 'overdue' ? 'active' : ''}`} onClick={() => setGroupMode('overdue')}>按逾期等级</button>
-                  <button type="button" className={`group-mode-btn ${groupMode === 'vaccine' ? 'active' : ''}`} onClick={() => setGroupMode('vaccine')}>按疫苗类型</button>
-                  <button type="button" className={`group-mode-btn ${groupMode === 'status' ? 'active' : ''}`} onClick={() => setGroupMode('status')}>按联系状态</button>
-                  <button type="button" className={`group-mode-btn ${groupMode === 'date' ? 'active' : ''}`} onClick={() => setGroupMode('date')}>按日期</button>
+                  <button type="button" className={`group-mode-btn ${groupMode === 'auto' ? 'active' : ''}`} onClick={() => saveGroupMode('auto')}>按规则引擎</button>
+                  <button type="button" className={`group-mode-btn ${groupMode === 'overdue' ? 'active' : ''}`} onClick={() => saveGroupMode('overdue')}>按逾期等级</button>
+                  <button type="button" className={`group-mode-btn ${groupMode === 'vaccine' ? 'active' : ''}`} onClick={() => saveGroupMode('vaccine')}>按疫苗类型</button>
+                  <button type="button" className={`group-mode-btn ${groupMode === 'status' ? 'active' : ''}`} onClick={() => saveGroupMode('status')}>按联系状态</button>
+                  <button type="button" className={`group-mode-btn ${groupMode === 'date' ? 'active' : ''}`} onClick={() => saveGroupMode('date')}>按日期</button>
                 </div>
               )}
               {appConfig.directory ? (
@@ -3426,6 +4043,263 @@ function App() {
                 >
                   <CheckCheck size={16} />
                   确认恢复（新增 {restorePreview.changes.addCount}，覆盖 {restorePreview.changes.overwriteCount}）
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {showStoreModal && (
+        <div className="modal-overlay" onClick={() => { setShowStoreModal(false); handleCancelStoreImport(); setStoreModalTab('list'); setEditingStoreId(null); setEditingStoreName(''); setNewStoreName(''); setNewStoreTemplateId(''); }}>
+          <div className="modal store-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2><Building2 size={20} />多门店离线数据空间</h2>
+              <button type="button" className="modal-close-btn" onClick={() => { setShowStoreModal(false); handleCancelStoreImport(); setStoreModalTab('list'); setEditingStoreId(null); setEditingStoreName(''); setNewStoreName(''); setNewStoreTemplateId(''); }}>
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="store-modal-tabs">
+              <button
+                type="button"
+                className={`store-tab-btn ${storeModalTab === 'list' ? 'active' : ''}`}
+                onClick={() => setStoreModalTab('list')}
+              >
+                门店列表
+              </button>
+              <button
+                type="button"
+                className={`store-tab-btn ${storeModalTab === 'create' ? 'active' : ''}`}
+                onClick={() => setStoreModalTab('create')}
+              >
+                <Plus size={14} />
+                新建门店
+              </button>
+              <button
+                type="button"
+                className={`store-tab-btn ${storeModalTab === 'import' ? 'active' : ''}`}
+                onClick={() => setStoreModalTab('import')}
+              >
+                <Upload size={14} />
+                导入门店
+              </button>
+            </div>
+
+            <div className="modal-body">
+              {storeModalTab === 'list' && (
+                <div className="store-list">
+                  <p className="store-list-hint">共 {stores.length} 个门店，点击门店名称可快速切换</p>
+                  <div className="store-list-items">
+                    {stores.map((store) => {
+                      const storeData = loadStoreData(store.id);
+                      const recordCount = storeData?.records?.length || 0;
+                      const isActive = store.id === currentStoreId;
+                      return (
+                        <div key={store.id} className={`store-item ${isActive ? 'active' : ''}`}>
+                          <div className="store-item-main" onClick={() => { handleSwitchStore(store.id); setShowStoreModal(false); }}>
+                            <div className="store-item-icon"><Building2 size={20} /></div>
+                            <div className="store-item-info">
+                              <div className="store-item-name">
+                                {store.name}
+                                {store.isDefault && <span className="store-badge-default">默认</span>}
+                                {isActive && <span className="store-badge-active">当前</span>}
+                              </div>
+                              <div className="store-item-meta">
+                                <span>{recordCount} 条记录</span>
+                                <span>创建于 {new Date(store.createdAt).toLocaleDateString('zh-CN')}</span>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="store-item-actions">
+                            {editingStoreId === store.id ? (
+                              <div className="store-rename-form">
+                                <input
+                                  type="text"
+                                  value={editingStoreName}
+                                  onChange={(e) => setEditingStoreName(e.target.value)}
+                                  placeholder="输入新名称"
+                                  autoFocus
+                                  onClick={(e) => e.stopPropagation()}
+                                />
+                                <button type="button" className="btn-primary btn-sm" onClick={handleRenameStore}>确定</button>
+                                <button type="button" className="btn-secondary btn-sm" onClick={() => { setEditingStoreId(null); setEditingStoreName(''); }}>取消</button>
+                              </div>
+                            ) : (
+                              <>
+                                <button
+                                  type="button"
+                                  className="store-action-btn"
+                                  title="重命名"
+                                  onClick={(e) => { e.stopPropagation(); setEditingStoreId(store.id); setEditingStoreName(store.name); }}
+                                >
+                                  <Edit3 size={14} />
+                                </button>
+                                <button
+                                  type="button"
+                                  className="store-action-btn"
+                                  title="复制为新门店"
+                                  onClick={(e) => { e.stopPropagation(); setNewStoreName(store.name + ' 副本'); setNewStoreTemplateId(store.id); setStoreModalTab('create'); }}
+                                >
+                                  <Copy size={14} />
+                                </button>
+                                <button
+                                  type="button"
+                                  className="store-action-btn"
+                                  title="导出门店数据"
+                                  onClick={(e) => { e.stopPropagation(); handleExportStore(store.id, store.name); }}
+                                >
+                                  <Download size={14} />
+                                </button>
+                                {!store.isDefault && (
+                                  <button
+                                    type="button"
+                                    className="store-action-btn delete-btn"
+                                    title="删除门店"
+                                    onClick={(e) => { e.stopPropagation(); handleDeleteStore(store.id); }}
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {storeModalTab === 'create' && (
+                <div className="store-create-form">
+                  <div className="form-grid">
+                    <label className="wide">
+                      门店名称
+                      <input
+                        type="text"
+                        value={newStoreName}
+                        onChange={(e) => setNewStoreName(e.target.value)}
+                        placeholder="请输入门店名称"
+                      />
+                    </label>
+                    <label className="wide">
+                      复制模板（可选）
+                      <select
+                        value={newStoreTemplateId}
+                        onChange={(e) => setNewStoreTemplateId(e.target.value)}
+                      >
+                        <option value="">不使用模板（空门店）</option>
+                        {stores.map((s) => (
+                          <option key={s.id} value={s.id}>复制自：{s.name}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <p className="hint">
+                    {newStoreTemplateId
+                      ? '将从选中门店复制所有数据（记录、模板、规则等）到新门店'
+                      : '新门店将使用默认模板和示例数据'}
+                  </p>
+                  <button
+                    type="button"
+                    className="primary"
+                    onClick={handleCreateStore}
+                    disabled={!newStoreName.trim()}
+                  >
+                    <Plus size={16} />
+                    创建门店
+                  </button>
+                </div>
+              )}
+
+              {storeModalTab === 'import' && (
+                <div className="store-import-form">
+                  <label className="wide">
+                    导入目标门店
+                    <select
+                      value={storeImportTargetId}
+                      onChange={(e) => setStoreImportTargetId(e.target.value)}
+                    >
+                      <option value="">请选择要覆盖的门店</option>
+                      {stores.map((s) => (
+                        <option key={s.id} value={s.id}>{s.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <p className="hint">选择目标门店后，导入的数据将覆盖该门店的所有现有数据</p>
+
+                  <div
+                    className="import-drop-zone"
+                    onDragOver={handleDragOver}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      const file = e.dataTransfer.files?.[0];
+                      if (file && file.name.endsWith('.json')) {
+                        const newE = { target: { files: [file] } };
+                        handleStoreImportFile(newE);
+                      } else {
+                        alert('请上传JSON格式的门店数据文件');
+                      }
+                    }}
+                  >
+                    <Upload size={32} className="drop-icon" />
+                    <p>拖拽 JSON 文件到此处，或</p>
+                    <button type="button" className="btn-secondary" onClick={() => storeImportFileRef.current?.click()}>
+                      选择文件
+                    </button>
+                    <input
+                      ref={storeImportFileRef}
+                      type="file"
+                      accept=".json,application/json"
+                      style={{ display: 'none' }}
+                      onChange={handleStoreImportFile}
+                    />
+                  </div>
+
+                  {storeImportPreview && (
+                    <div className={`import-preview ${storeImportPreview.valid ? 'valid' : 'invalid'}`}>
+                      <h4>
+                        {storeImportPreview.valid ? (
+                          <><CheckCircle2 size={16} className="success-icon" /> 文件解析成功</>
+                        ) : (
+                          <><AlertTriangle size={16} className="warning-icon" /> 文件解析失败</>
+                        )}
+                      </h4>
+                      <p>文件名：{storeImportPreview.fileName}</p>
+                      {storeImportPreview.valid && (
+                        <div className="import-stats">
+                          <span>记录数：{storeImportPreview.recordCount}</span>
+                          <span>模板数：{storeImportPreview.templateCount}</span>
+                          <span>规则数：{storeImportPreview.ruleCount}</span>
+                        </div>
+                      )}
+                      {storeImportPreview.errors.length > 0 && (
+                        <div className="import-errors">
+                          {storeImportPreview.errors.map((err, i) => (
+                            <p key={i} className="error-text">❌ {err}</p>
+                          ))}
+                        </div>
+                      )}
+                      {storeImportPreview.warnings.length > 0 && (
+                        <div className="import-warnings">
+                          {storeImportPreview.warnings.map((w, i) => (
+                            <p key={i} className="warning-text">⚠️ {w}</p>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {storeModalTab === 'import' && storeImportPreview?.valid && storeImportTargetId && (
+              <div className="modal-footer">
+                <button type="button" className="btn-secondary" onClick={handleCancelStoreImport}>取消</button>
+                <button type="button" className="btn-primary" onClick={handleConfirmStoreImport}>
+                  <CheckCheck size={16} />
+                  确认导入
                 </button>
               </div>
             )}
