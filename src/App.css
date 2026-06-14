@@ -3910,3 +3910,213 @@ textarea { min-height: 76px; resize: vertical; }
     overflow-y: auto;
   }
 }
+
+.batch-action-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 18px;
+  background: linear-gradient(to right, rgba(219, 39, 119, 0.08), #fff);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  margin-bottom: 14px;
+}
+
+.batch-selection-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #374151;
+  font-size: 14px;
+}
+
+.batch-selection-info strong {
+  color: var(--accent);
+  font-size: 16px;
+}
+
+.batch-pending-info {
+  color: #059669;
+}
+
+.batch-pending-info strong {
+  color: #047857;
+}
+
+.batch-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.batch-mark-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #059669;
+  color: white;
+  border: 1px solid #059669;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 13px;
+  transition: all .16s;
+}
+
+.batch-mark-btn:hover {
+  background: #047857;
+  border-color: #047857;
+}
+
+.contact-group-checkbox,
+.contact-record-checkbox {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.contact-group-checkbox input,
+.contact-record-checkbox input {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
+.contact-group-checkbox {
+  margin-right: 4px;
+}
+
+.contact-record-checkbox {
+  margin-right: 8px;
+  margin-top: 2px;
+}
+
+.contact-record-selected {
+  border-color: var(--accent) !important;
+  background: linear-gradient(to right, rgba(219, 39, 119, 0.04), #fff);
+  box-shadow: 0 0 0 2px rgba(219, 39, 119, 0.15);
+}
+
+.batch-confirm-section {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.batch-impact-summary {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.impact-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+}
+
+.impact-icon {
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  background: var(--accent);
+  color: white;
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+
+.impact-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.impact-label {
+  font-size: 13px;
+  color: #6b7280;
+  font-weight: 500;
+}
+
+.impact-value {
+  font-size: 24px;
+  font-weight: 700;
+  color: #111827;
+}
+
+.batch-preview-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.batch-hints {
+  margin: 0;
+  padding-left: 20px;
+  color: #4b5563;
+  font-size: 13px;
+  line-height: 1.8;
+}
+
+.batch-hints strong {
+  color: var(--accent);
+}
+
+.more-records {
+  text-align: center;
+  color: #9ca3af;
+  font-size: 12px;
+  margin-top: 8px;
+}
+
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #fff;
+  color: #374151;
+  border: 1px solid #d1d5db;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-weight: 500;
+  font-size: 13px;
+  transition: all .16s;
+}
+
+.btn-secondary:hover {
+  background: #f9fafb;
+  border-color: #9ca3af;
+}
+
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--accent);
+  color: white;
+  border: 1px solid var(--accent);
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 13px;
+  transition: all .16s;
+}
+
+.btn-primary:hover {
+  background: #be185d;
+  border-color: #be185d;
+}
+
+.btn-primary:disabled {
+  background: #9ca3af;
+  border-color: #9ca3af;
+  cursor: not-allowed;
+  opacity: 0.7;
+}

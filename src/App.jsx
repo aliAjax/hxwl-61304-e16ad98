@@ -891,6 +891,9 @@ function App() {
   const [storeImportFile, setStoreImportFile] = useState(null);
   const storeImportFileRef = useRef(null);
   const [storeImportTargetId, setStoreImportTargetId] = useState('');
+  const [selectedContactIds, setSelectedContactIds] = useState(new Set());
+  const [showBatchContactModal, setShowBatchContactModal] = useState(false);
+  const [batchContactOperator, setBatchContactOperator] = useState('');
 
   const currentStore = useMemo(() => {
     return stores.find(s => s.id === currentStoreId) || stores[0] || null;
@@ -1410,6 +1413,46 @@ function App() {
     } : item);
     persist(next);
     if (selected?.id === id) setSelected(next.find((item) => item.id === id));
+  }
+
+  function batchUpdateStatus(ids, status, operator = '批量操作') {
+    if (ids.size === 0) return;
+    const batchTimelineEntry = { status, at: today, by: operator.trim() || '批量操作' };
+    const next = records.map((item) => ids.has(item.id) ? {
+      ...item,
+      status,
+      timeline: [...(item.timeline || []), batchTimelineEntry]
+    } : item);
+    persist(next);
+    if (selected && ids.has(selected.id)) {
+      setSelected(next.find((item) => item.id === selected.id));
+    }
+    setSelectedContactIds(new Set());
+  }
+
+  function toggleContactSelection(id) {
+    const next = new Set(selectedContactIds);
+    if (next.has(id)) {
+      next.delete(id);
+    } else {
+      next.add(id);
+    }
+    setSelectedContactIds(next);
+  }
+
+  function toggleGroupSelection(items) {
+    const allSelected = items.every(item => selectedContactIds.has(item.id));
+    const next = new Set(selectedContactIds);
+    if (allSelected) {
+      items.forEach(item => next.delete(item.id));
+    } else {
+      items.forEach(item => next.add(item.id));
+    }
+    setSelectedContactIds(next);
+  }
+
+  function clearContactSelection() {
+    setSelectedContactIds(new Set());
   }
 
   function removeRecord(id) {
@@ -2238,6 +2281,27 @@ function App() {
     return { overdueByLevel, today: todayList, upcoming: upcomingList };
   }, [filteredRecords, rules]);
 
+  const allContactRecords = useMemo(() => {
+    const all = [];
+    Object.values(contactListGroups.overdueByLevel).forEach(items => all.push(...items));
+    all.push(...contactListGroups.today);
+    all.push(...contactListGroups.upcoming);
+    return all;
+  }, [contactListGroups]);
+
+  const pendingContactRecords = useMemo(() => {
+    return allContactRecords.filter(item => item.status === '待联系');
+  }, [allContactRecords]);
+
+  const selectedPendingCount = useMemo(() => {
+    let count = 0;
+    selectedContactIds.forEach(id => {
+      const item = allContactRecords.find(r => r.id === id);
+      if (item && item.status === '待联系') count++;
+    });
+    return count;
+  }, [selectedContactIds, allContactRecords]);
+
   const groupedByDate = useMemo(() => {
     if (groupMode === 'auto') {
       return filteredRecords.reduce((acc, item) => {
@@ -2628,12 +2692,52 @@ function App() {
             <PhoneCall size={18} />
             <h2>今日联系清单</h2>
           </div>
+
+          {selectedContactIds.size > 0 && (
+            <div className="batch-action-bar">
+              <div className="batch-selection-info">
+                <CheckCheck size={16} />
+                <span>已选择 <strong>{selectedContactIds.size}</strong> 条记录</span>
+                {selectedPendingCount > 0 && (
+                  <span className="batch-pending-info">（其中 <strong>{selectedPendingCount}</strong> 条待联系）</span>
+                )}
+              </div>
+              <div className="batch-actions">
+                {selectedPendingCount > 0 && (
+                  <button
+                    type="button"
+                    className="btn-primary batch-mark-btn"
+                    onClick={() => setShowBatchContactModal(true)}
+                  >
+                    <CheckCircle2 size={14} />
+                    批量标记为已联系
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={clearContactSelection}
+                >
+                  <X size={14} />
+                  取消选择
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="contact-groups">
             {Object.entries(contactListGroups.overdueByLevel).length > 0 ? (
               Object.entries(contactListGroups.overdueByLevel).map(([levelLabel, items]) => (
                 <div className={`contact-group overdue-group overdue-level-${items[0]?.overdueLevel?.level ?? 0}`} key={levelLabel}>
                   <div className="contact-group-header">
                     <div className="contact-group-title">
+                      <label className="contact-group-checkbox">
+                        <input
+                          type="checkbox"
+                          checked={items.length > 0 && items.every(item => selectedContactIds.has(item.id))}
+                          onChange={() => toggleGroupSelection(items)}
+                        />
+                      </label>
                       <AlertCircle size={16} className="contact-group-icon overdue-icon" />
                       <h3>{levelLabel}</h3>
                       <span className="contact-count">{items.length}</span>
@@ -2641,8 +2745,15 @@ function App() {
                   </div>
                   <div className="contact-records">
                     {items.map((item) => (
-                      <article className={'contact-record ' + (item.status === '已联系' ? 'contact-record-done' : '')} key={item.id}>
+                      <article className={'contact-record ' + (item.status === '已联系' ? 'contact-record-done' : '') + (selectedContactIds.has(item.id) ? ' contact-record-selected' : '')} key={item.id}>
                         <div className="contact-record-main">
+                          <label className="contact-record-checkbox" onClick={(e) => e.stopPropagation()}>
+                            <input
+                              type="checkbox"
+                              checked={selectedContactIds.has(item.id)}
+                              onChange={() => toggleContactSelection(item.id)}
+                            />
+                          </label>
                           <div className="contact-record-info">
                             <h4>{item.pet}</h4>
                             <p className="contact-meta">{item.ownerPhone}</p>
@@ -2687,6 +2798,15 @@ function App() {
             <div className="contact-group today-group">
               <div className="contact-group-header">
                 <div className="contact-group-title">
+                  {contactListGroups.today.length > 0 && (
+                    <label className="contact-group-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={contactListGroups.today.length > 0 && contactListGroups.today.every(item => selectedContactIds.has(item.id))}
+                        onChange={() => toggleGroupSelection(contactListGroups.today)}
+                      />
+                    </label>
+                  )}
                   <Clock size={16} className="contact-group-icon today-icon" />
                   <h3>今日提醒</h3>
                   <span className="contact-count">{contactListGroups.today.length}</span>
@@ -2697,8 +2817,15 @@ function App() {
                   <p className="empty-group">今日暂无提醒</p>
                 ) : (
                   contactListGroups.today.map((item) => (
-                    <article className={'contact-record ' + (item.status === '已联系' ? 'contact-record-done' : '')} key={item.id}>
+                    <article className={'contact-record ' + (item.status === '已联系' ? 'contact-record-done' : '') + (selectedContactIds.has(item.id) ? ' contact-record-selected' : '')} key={item.id}>
                       <div className="contact-record-main">
+                        <label className="contact-record-checkbox" onClick={(e) => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            checked={selectedContactIds.has(item.id)}
+                            onChange={() => toggleContactSelection(item.id)}
+                          />
+                        </label>
                         <div className="contact-record-info">
                           <h4>{item.pet}</h4>
                           <p className="contact-meta">{item.ownerPhone}</p>
@@ -2729,6 +2856,15 @@ function App() {
             <div className="contact-group upcoming-group">
               <div className="contact-group-header">
                 <div className="contact-group-title">
+                  {contactListGroups.upcoming.length > 0 && (
+                    <label className="contact-group-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={contactListGroups.upcoming.length > 0 && contactListGroups.upcoming.every(item => selectedContactIds.has(item.id))}
+                        onChange={() => toggleGroupSelection(contactListGroups.upcoming)}
+                      />
+                    </label>
+                  )}
                   <CalendarCheck size={16} className="contact-group-icon upcoming-icon" />
                   <h3>即将到期</h3>
                   <span className="contact-count">{contactListGroups.upcoming.length}</span>
@@ -2739,8 +2875,15 @@ function App() {
                   <p className="empty-group">暂无近期提醒</p>
                 ) : (
                   contactListGroups.upcoming.map((item) => (
-                    <article className={'contact-record ' + (item.status === '已联系' ? 'contact-record-done' : '')} key={item.id}>
+                    <article className={'contact-record ' + (item.status === '已联系' ? 'contact-record-done' : '') + (selectedContactIds.has(item.id) ? ' contact-record-selected' : '')} key={item.id}>
                       <div className="contact-record-main">
+                        <label className="contact-record-checkbox" onClick={(e) => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            checked={selectedContactIds.has(item.id)}
+                            onChange={() => toggleContactSelection(item.id)}
+                          />
+                        </label>
                         <div className="contact-record-info">
                           <h4>{item.pet}</h4>
                           <p className="contact-meta">{item.ownerPhone}</p>
@@ -4286,6 +4429,146 @@ function App() {
                 </button>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {showBatchContactModal && (
+        <div className="modal-overlay" onClick={() => { setShowBatchContactModal(false); setBatchContactOperator(''); }}>
+          <div className="modal-content import-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div className="modal-title">
+                <CheckCircle2 size={20} />
+                <h2>批量标记为已联系</h2>
+              </div>
+              <button type="button" className="modal-close" onClick={() => { setShowBatchContactModal(false); setBatchContactOperator(''); }}>
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="modal-body">
+              <div className="batch-confirm-section">
+                <div className="batch-impact-summary">
+                  <div className="impact-card">
+                    <div className="impact-icon">
+                      <Users size={24} />
+                    </div>
+                    <div className="impact-content">
+                      <span className="impact-label">影响记录数</span>
+                      <span className="impact-value">{selectedPendingCount}</span>
+                    </div>
+                  </div>
+                  <div className="impact-card">
+                    <div className="impact-icon">
+                      <PawPrint size={24} />
+                    </div>
+                    <div className="impact-content">
+                      <span className="impact-label">涉及宠物</span>
+                      <span className="impact-value">
+                        {new Set(
+                          Array.from(selectedContactIds)
+                            .map(id => allContactRecords.find(r => r.id === id))
+                            .filter(r => r && r.status === '待联系')
+                            .map(r => r.ownerPhone)
+                        ).size}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="batch-preview-section">
+                  <div className="section-title">
+                    <Info size={16} />
+                    <h3>操作说明</h3>
+                  </div>
+                  <ul className="batch-hints">
+                    <li>所有选中的 <strong>{selectedPendingCount}</strong> 条"待联系"记录将被标记为"已联系"</li>
+                    <li>已处于"已联系"或"已接种"状态的记录不会被修改</li>
+                    <li>所有记录将写入 <strong>同一条时间线记录</strong>，操作时间和操作人保持一致</li>
+                    <li>操作完成后，详情、主人档案和统计数据将立即同步更新</li>
+                  </ul>
+                </div>
+
+                <div className="batch-preview-section">
+                  <div className="section-title">
+                    <ClipboardList size={16} />
+                    <h3>待处理记录预览（前10条）</h3>
+                  </div>
+                  <div className="preview-table-container">
+                    <table className="preview-table">
+                      <thead>
+                        <tr>
+                          <th>宠物姓名</th>
+                          <th>主人联系方式</th>
+                          <th>疫苗类型</th>
+                          <th>当前状态</th>
+                          <th>分组</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {Array.from(selectedContactIds)
+                          .map(id => allContactRecords.find(r => r.id === id))
+                          .filter(r => r && r.status === '待联系')
+                          .slice(0, 10)
+                          .map((item) => (
+                            <tr key={item.id}>
+                              <td>{item.pet}</td>
+                              <td>{item.ownerPhone}</td>
+                              <td>{item.vaccine}</td>
+                              <td><span className={`status ${statusClass(item.status)}`}>{item.status}</span></td>
+                              <td>
+                                {isOverdue(item.nextDate) ? '逾期' : isToday(item.nextDate) ? '今日' : '即将到期'}
+                              </td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                    {selectedPendingCount > 10 && (
+                      <p className="more-records">... 还有 {selectedPendingCount - 10} 条记录</p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="form-field">
+                  <label>
+                    <span>操作人姓名</span>
+                    <input
+                      type="text"
+                      value={batchContactOperator}
+                      onChange={(e) => setBatchContactOperator(e.target.value)}
+                      placeholder="请输入操作人姓名（可选）"
+                    />
+                  </label>
+                  <span className="field-hint">时间线记录中将显示操作人，留空则显示"批量操作"</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="modal-footer">
+              <button type="button" className="btn-secondary" onClick={() => { setShowBatchContactModal(false); setBatchContactOperator(''); }}>
+                取消
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() => {
+                  const pendingIds = new Set(
+                    Array.from(selectedContactIds)
+                      .filter(id => {
+                        const item = allContactRecords.find(r => r.id === id);
+                        return item && item.status === '待联系';
+                      })
+                  );
+                  batchUpdateStatus(pendingIds, '已联系', batchContactOperator);
+                  setShowBatchContactModal(false);
+                  setBatchContactOperator('');
+                }}
+                disabled={selectedPendingCount === 0}
+              >
+                <CheckCheck size={16} />
+                确认批量标记 {selectedPendingCount} 条记录为已联系
+              </button>
+            </div>
           </div>
         </div>
       )}
