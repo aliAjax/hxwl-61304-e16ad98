@@ -1,5 +1,5 @@
 import { useMemo, useState, useRef } from 'react';
-import { Syringe, Plus, Search, Trash2, RotateCcw, CheckCircle2, AlertTriangle, ClipboardList, CalendarDays, PhoneCall, Clock, AlertCircle, CalendarCheck, MessageSquareText, X, User, Calendar, Upload, FileText, AlertOctagon, CheckCheck, Info, Users, PawPrint, ArrowLeft, ChevronRight, Settings, Save, Edit3 } from 'lucide-react';
+import { Syringe, Plus, Search, Trash2, RotateCcw, CheckCircle2, AlertTriangle, ClipboardList, CalendarDays, PhoneCall, Clock, AlertCircle, CalendarCheck, MessageSquareText, X, User, Calendar, Upload, FileText, AlertOctagon, CheckCheck, Info, Users, PawPrint, ArrowLeft, ChevronRight, Settings, Save, Edit3, Zap, Filter, PlusCircle, MinusCircle } from 'lucide-react';
 import './App.css';
 
 const appConfig = {
@@ -173,6 +173,107 @@ const defaultTemplates = [
   { id: 'tpl-9', species: '其他', vaccine: '体内驱虫', days: 90 },
 ];
 
+const defaultRules = [
+  {
+    id: 'rule-1',
+    vaccine: '猫三联',
+    advanceDays: 7,
+    overdueLevels: [
+      { id: 'ol-1', label: '轻度逾期', min: 1, max: 7 },
+      { id: 'ol-2', label: '中度逾期', min: 8, max: 30 },
+      { id: 'ol-3', label: '重度逾期', min: 31, max: 9999 }
+    ],
+    defaultStatus: '待联系',
+    autoGroup: 'overdue'
+  },
+  {
+    id: 'rule-2',
+    vaccine: '狂犬',
+    advanceDays: 14,
+    overdueLevels: [
+      { id: 'ol-4', label: '轻度逾期', min: 1, max: 7 },
+      { id: 'ol-5', label: '中度逾期', min: 8, max: 30 },
+      { id: 'ol-6', label: '重度逾期', min: 31, max: 9999 }
+    ],
+    defaultStatus: '待联系',
+    autoGroup: 'overdue'
+  },
+  {
+    id: 'rule-3',
+    vaccine: '犬六联',
+    advanceDays: 7,
+    overdueLevels: [
+      { id: 'ol-7', label: '轻度逾期', min: 1, max: 7 },
+      { id: 'ol-8', label: '中度逾期', min: 8, max: 30 },
+      { id: 'ol-9', label: '重度逾期', min: 31, max: 9999 }
+    ],
+    defaultStatus: '待联系',
+    autoGroup: 'overdue'
+  },
+  {
+    id: 'rule-4',
+    vaccine: '体内驱虫',
+    advanceDays: 3,
+    overdueLevels: [
+      { id: 'ol-10', label: '轻度逾期', min: 1, max: 3 },
+      { id: 'ol-11', label: '中度逾期', min: 4, max: 14 },
+      { id: 'ol-12', label: '重度逾期', min: 15, max: 9999 }
+    ],
+    defaultStatus: '待联系',
+    autoGroup: 'vaccine'
+  }
+];
+
+const RULES_STORAGE_KEY = appConfig.storage + '-rules';
+
+function loadRules() {
+  const raw = localStorage.getItem(RULES_STORAGE_KEY);
+  if (raw) {
+    try { return JSON.parse(raw); } catch { return [...defaultRules]; }
+  }
+  return [...defaultRules];
+}
+
+function persistRules(rules) {
+  localStorage.setItem(RULES_STORAGE_KEY, JSON.stringify(rules));
+}
+
+function getRuleForVaccine(vaccine, rules) {
+  return rules.find(r => r.vaccine === vaccine) || null;
+}
+
+function getAdvanceDays(vaccine, rules) {
+  const rule = getRuleForVaccine(vaccine, rules);
+  return rule ? rule.advanceDays : 7;
+}
+
+function getDefaultStatusForVaccine(vaccine, rules) {
+  const rule = getRuleForVaccine(vaccine, rules);
+  return rule ? rule.defaultStatus : appConfig.primaryStatus;
+}
+
+function getOverdueLevel(overdueDays, vaccine, rules) {
+  if (overdueDays <= 0) return null;
+  const rule = getRuleForVaccine(vaccine, rules);
+  if (!rule || !rule.overdueLevels || rule.overdueLevels.length === 0) {
+    if (overdueDays <= 7) return { label: '轻度逾期', level: 0 };
+    if (overdueDays <= 30) return { label: '中度逾期', level: 1 };
+    return { label: '重度逾期', level: 2 };
+  }
+  for (let i = 0; i < rule.overdueLevels.length; i++) {
+    const ol = rule.overdueLevels[i];
+    if (overdueDays >= ol.min && overdueDays <= ol.max) {
+      return { label: ol.label, level: i, id: ol.id };
+    }
+  }
+  return { label: rule.overdueLevels[rule.overdueLevels.length - 1].label, level: rule.overdueLevels.length - 1, id: rule.overdueLevels[rule.overdueLevels.length - 1].id };
+}
+
+function getAutoGroupForVaccine(vaccine, rules) {
+  const rule = getRuleForVaccine(vaccine, rules);
+  return rule ? rule.autoGroup : 'overdue';
+}
+
 const TEMPLATE_STORAGE_KEY = appConfig.storage + '-templates';
 
 function loadTemplates() {
@@ -217,15 +318,74 @@ function uid() {
   return Math.random().toString(36).slice(2, 10);
 }
 
+const SCHEMA_VERSION = 2;
+
+function migrateRecord(record) {
+  const migrated = { ...record };
+  let needsPersist = false;
+
+  if (!migrated.id) {
+    migrated.id = uid();
+    needsPersist = true;
+  }
+
+  if (!migrated.status) {
+    migrated.status = appConfig.primaryStatus;
+    needsPersist = true;
+  }
+
+  if (!migrated.timeline || !Array.isArray(migrated.timeline) || migrated.timeline.length === 0) {
+    migrated.timeline = [{
+      status: migrated.status || appConfig.primaryStatus,
+      at: today,
+      by: '数据迁移'
+    }];
+    needsPersist = true;
+  }
+
+  if (!migrated.notes || !Array.isArray(migrated.notes)) {
+    migrated.notes = [];
+    needsPersist = true;
+  }
+
+  if (!migrated.schemaVersion || migrated.schemaVersion < SCHEMA_VERSION) {
+    migrated.schemaVersion = SCHEMA_VERSION;
+    needsPersist = true;
+  }
+
+  return { record: migrated, needsPersist };
+}
+
+function migrateRecordsIfNeeded(records) {
+  let hasChanges = false;
+  const migrated = records.map(record => {
+    const result = migrateRecord(record);
+    if (result.needsPersist) hasChanges = true;
+    return result.record;
+  });
+  return { records: migrated, hasChanges };
+}
+
 function withIds(items) {
-  return items.map((item) => ({ id: uid(), ...item, timeline: item.timeline || [{ status: item.status, at: today, by: '系统' }], notes: item.notes || [] }));
+  return items.map((item) => ({
+    id: uid(),
+    ...item,
+    timeline: item.timeline || [{ status: item.status, at: today, by: '系统' }],
+    notes: item.notes || [],
+    schemaVersion: SCHEMA_VERSION
+  }));
 }
 
 function loadRecords() {
   const raw = localStorage.getItem(appConfig.storage);
   if (raw) {
     try {
-      return JSON.parse(raw);
+      const parsed = JSON.parse(raw);
+      const { records, hasChanges } = migrateRecordsIfNeeded(parsed);
+      if (hasChanges) {
+        localStorage.setItem(appConfig.storage, JSON.stringify(records));
+      }
+      return records;
     } catch {
       return withIds(appConfig.seed);
     }
@@ -269,6 +429,20 @@ function isWithin7DaysExcludingToday(dateText) {
   const now = parseLocalDate(today);
   const diff = (date.getTime() - now.getTime()) / 86400000;
   return diff > 0 && diff <= 7;
+}
+
+function isWithinNextDays(dateText, days) {
+  if (!dateText) return false;
+  const date = parseLocalDate(dateText);
+  const now = parseLocalDate(today);
+  const diff = (date.getTime() - now.getTime()) / 86400000;
+  return diff > 0 && diff <= days;
+}
+
+function isWithinAdvanceDays(item, rules) {
+  if (!item || !item.nextDate) return false;
+  const adv = getAdvanceDays(item.vaccine, rules);
+  return isWithinNextDays(item.nextDate, adv);
 }
 
 function daysDiff(dateText) {
@@ -325,6 +499,20 @@ function App() {
   const [templates, setTemplates] = useState(loadTemplates);
   const [editingTemplate, setEditingTemplate] = useState(null);
   const [templateForm, setTemplateForm] = useState({ species: '', vaccine: '', days: '' });
+  const [rules, setRules] = useState(loadRules);
+  const [editingRule, setEditingRule] = useState(null);
+  const [ruleForm, setRuleForm] = useState({
+    vaccine: '',
+    advanceDays: 7,
+    overdueLevels: [
+      { id: uid(), label: '轻度逾期', min: 1, max: 7 },
+      { id: uid(), label: '中度逾期', min: 8, max: 30 },
+      { id: uid(), label: '重度逾期', min: 31, max: 9999 }
+    ],
+    defaultStatus: '待联系',
+    autoGroup: 'overdue'
+  });
+  const [groupMode, setGroupMode] = useState('auto');
   const [nextDateManual, setNextDateManual] = useState(false);
   const [calendarDate, setCalendarDate] = useState(new Date());
   const [selectedCalendarDay, setSelectedCalendarDay] = useState(null);
@@ -375,6 +563,106 @@ function App() {
     setTemplateForm({ species: '', vaccine: '', days: '' });
   }
 
+  function saveRules(next) {
+    setRules(next);
+    persistRules(next);
+  }
+
+  function addRule(e) {
+    e.preventDefault();
+    if (!ruleForm.vaccine || !ruleForm.advanceDays || Number(ruleForm.advanceDays) <= 0) return;
+    const existing = rules.find(r => r.vaccine === ruleForm.vaccine);
+    if (existing) {
+      const next = rules.map(r => r.id === existing.id ? { ...r, ...ruleForm, advanceDays: Number(ruleForm.advanceDays) } : r);
+      saveRules(next);
+    } else {
+      const next = [...rules, { id: uid(), ...ruleForm, advanceDays: Number(ruleForm.advanceDays) }];
+      saveRules(next);
+    }
+    setRuleForm({
+      vaccine: '',
+      advanceDays: 7,
+      overdueLevels: [
+        { id: uid(), label: '轻度逾期', min: 1, max: 7 },
+        { id: uid(), label: '中度逾期', min: 8, max: 30 },
+        { id: uid(), label: '重度逾期', min: 31, max: 9999 }
+      ],
+      defaultStatus: '待联系',
+      autoGroup: 'overdue'
+    });
+    setEditingRule(null);
+  }
+
+  function removeRule(id) {
+    saveRules(rules.filter(r => r.id !== id));
+  }
+
+  function restoreDefaultRules() {
+    saveRules(defaultRules.map(r => ({ ...r })));
+    setEditingRule(null);
+    setRuleForm({
+      vaccine: '',
+      advanceDays: 7,
+      overdueLevels: [
+        { id: uid(), label: '轻度逾期', min: 1, max: 7 },
+        { id: uid(), label: '中度逾期', min: 8, max: 30 },
+        { id: uid(), label: '重度逾期', min: 31, max: 9999 }
+      ],
+      defaultStatus: '待联系',
+      autoGroup: 'overdue'
+    });
+  }
+
+  function startEditRule(rule) {
+    setEditingRule(rule.id);
+    setRuleForm({
+      vaccine: rule.vaccine,
+      advanceDays: rule.advanceDays,
+      overdueLevels: (rule.overdueLevels || []).map(ol => ({ ...ol })),
+      defaultStatus: rule.defaultStatus,
+      autoGroup: rule.autoGroup
+    });
+  }
+
+  function cancelEditRule() {
+    setEditingRule(null);
+    setRuleForm({
+      vaccine: '',
+      advanceDays: 7,
+      overdueLevels: [
+        { id: uid(), label: '轻度逾期', min: 1, max: 7 },
+        { id: uid(), label: '中度逾期', min: 8, max: 30 },
+        { id: uid(), label: '重度逾期', min: 31, max: 9999 }
+      ],
+      defaultStatus: '待联系',
+      autoGroup: 'overdue'
+    });
+  }
+
+  function addOverdueLevelToForm() {
+    setRuleForm({
+      ...ruleForm,
+      overdueLevels: [...ruleForm.overdueLevels, { id: uid(), label: '', min: 1, max: 9999 }]
+    });
+  }
+
+  function removeOverdueLevelFromForm(levelId) {
+    if (ruleForm.overdueLevels.length <= 1) return;
+    setRuleForm({
+      ...ruleForm,
+      overdueLevels: ruleForm.overdueLevels.filter(ol => ol.id !== levelId)
+    });
+  }
+
+  function updateOverdueLevelInForm(levelId, field, value) {
+    setRuleForm({
+      ...ruleForm,
+      overdueLevels: ruleForm.overdueLevels.map(ol =>
+        ol.id === levelId ? { ...ol, [field]: field === 'label' ? value : Number(value) } : ol
+      )
+    });
+  }
+
   function repairRecords() {
     const next = records.map(item => {
       if (item.nextDate && item.lastDate) return item;
@@ -395,14 +683,17 @@ function App() {
     const submittedRecord = { ...form, ...submittedValues };
     const autoNext = calcNextDate(submittedRecord.lastDate, submittedRecord.species, submittedRecord.vaccine, templates);
     const finalNextDate = submittedRecord.nextDate || autoNext;
+    const ruleDefaultStatus = getDefaultStatusForVaccine(submittedRecord.vaccine, rules);
+    const finalStatus = submittedRecord.status || ruleDefaultStatus;
     const nextRecord = {
       id: uid(),
       ...submittedRecord,
       nextDate: finalNextDate,
-      status: submittedRecord.status || appConfig.primaryStatus,
+      status: finalStatus,
       createdAt: new Date().toISOString(),
-      timeline: [{ status: submittedRecord.status || appConfig.primaryStatus, at: today, by: '录入' }],
-      notes: []
+      timeline: [{ status: finalStatus, at: today, by: '录入' }],
+      notes: [],
+      schemaVersion: SCHEMA_VERSION
     };
 
     if (appConfig.conflict === 'date-slot' && records.some((item) => item.date === nextRecord.date && item.slot === nextRecord.slot)) {
@@ -469,7 +760,8 @@ function App() {
   }
 
   function duplicateRecord(item) {
-    const copied = { ...item, id: uid(), status: appConfig.primaryStatus, timeline: [{ status: appConfig.primaryStatus, at: today, by: '复制' }], notes: [] };
+    const dupStatus = getDefaultStatusForVaccine(item.vaccine, rules);
+    const copied = { ...item, id: uid(), status: dupStatus, timeline: [{ status: dupStatus, at: today, by: '复制' }], notes: [], schemaVersion: SCHEMA_VERSION };
     persist([copied, ...records]);
     setSelected(copied);
   }
@@ -738,14 +1030,18 @@ function App() {
 
   function confirmImport() {
     if (!importPreview) return;
-    const newRecords = importPreview.validRows.map(row => ({
-      id: uid(),
-      ...row.data,
-      status: appConfig.primaryStatus,
-      createdAt: new Date().toISOString(),
-      timeline: [{ status: appConfig.primaryStatus, at: today, by: '批量导入' }],
-      notes: []
-    }));
+    const newRecords = importPreview.validRows.map(row => {
+      const importStatus = getDefaultStatusForVaccine(row.data.vaccine, rules);
+      return {
+        id: uid(),
+        ...row.data,
+        status: importStatus,
+        createdAt: new Date().toISOString(),
+        timeline: [{ status: importStatus, at: today, by: '批量导入' }],
+        notes: [],
+        schemaVersion: SCHEMA_VERSION
+      };
+    });
     persist([...newRecords, ...records]);
     setShowImportModal(false);
     setImportPreview(null);
@@ -1002,6 +1298,11 @@ function App() {
         }
       }
 
+      if (!migratedRecord.schemaVersion || migratedRecord.schemaVersion < SCHEMA_VERSION) {
+        migratedRecord.schemaVersion = SCHEMA_VERSION;
+        needsMigration = true;
+      }
+
       if (needsMigration) migratedCount++;
 
       if (recordErrors.length > 0) {
@@ -1218,39 +1519,123 @@ function App() {
           const rank = priorityRank(a.priority) - priorityRank(b.priority);
           if (rank !== 0) return rank;
         }
+        const aOverdue = isOverdue(a.nextDate);
+        const bOverdue = isOverdue(b.nextDate);
+        if (aOverdue && !bOverdue) return -1;
+        if (!aOverdue && bOverdue) return 1;
+        if (aOverdue && bOverdue) {
+          const aDays = Math.abs(daysDiff(a.nextDate));
+          const bDays = Math.abs(daysDiff(b.nextDate));
+          const aLevel = getOverdueLevel(aDays, a.vaccine, rules);
+          const bLevel = getOverdueLevel(bDays, b.vaccine, rules);
+          if (aLevel && bLevel && aLevel.level !== bLevel.level) {
+            return bLevel.level - aLevel.level;
+          }
+          return bDays - aDays;
+        }
         const aDate = a[appConfig.dateKey] || a.sentAt || a.createdAt || '';
         const bDate = b[appConfig.dateKey] || b.sentAt || b.createdAt || '';
         return String(aDate).localeCompare(String(bDate));
       });
-  }, [records, filters]);
+  }, [records, filters, rules]);
 
   const metrics = [
     { label: "宠物数", value: records.length },
     { label: "待联系", value: records.filter((item) => item.status === '待联系').length },
-    { label: "本周提醒", value: records.filter((item) => inNextDays(item.nextDate, 7)).length },
+    { label: "即将到期", value: records.filter((item) => {
+      if (!item.nextDate) return false;
+      const adv = getAdvanceDays(item.vaccine, rules);
+      return inNextDays(item.nextDate, adv);
+    }).length },
   ];
 
   const contactListGroups = useMemo(() => {
-    return {
-      overdue: records
-        .filter((item) => isOverdue(item.nextDate))
-        .sort((a, b) => parseLocalDate(a.nextDate) - parseLocalDate(b.nextDate)),
-      today: records
-        .filter((item) => isToday(item.nextDate))
-        .sort((a, b) => parseLocalDate(a.nextDate) - parseLocalDate(b.nextDate)),
-      upcoming: records
-        .filter((item) => isWithin7DaysExcludingToday(item.nextDate))
-        .sort((a, b) => parseLocalDate(a.nextDate) - parseLocalDate(b.nextDate)),
-    };
-  }, [records]);
+    const overdueByLevel = {};
+    const todayList = [];
+    const upcomingList = [];
+    records.forEach(item => {
+      if (isOverdue(item.nextDate)) {
+        const diff = Math.abs(daysDiff(item.nextDate));
+        const level = getOverdueLevel(diff, item.vaccine, rules);
+        const key = level ? level.label : '逾期';
+        if (!overdueByLevel[key]) overdueByLevel[key] = [];
+        overdueByLevel[key].push({ ...item, overdueDays: diff, overdueLevel: level });
+      } else if (isToday(item.nextDate)) {
+        todayList.push(item);
+      } else {
+        const adv = getAdvanceDays(item.vaccine, rules);
+        if (isWithinNextDays(item.nextDate, adv)) {
+          upcomingList.push(item);
+        }
+      }
+    });
+    Object.keys(overdueByLevel).forEach(key => {
+      overdueByLevel[key].sort((a, b) => a.overdueDays - b.overdueDays);
+    });
+    todayList.sort((a, b) => parseLocalDate(a.nextDate) - parseLocalDate(b.nextDate));
+    upcomingList.sort((a, b) => parseLocalDate(a.nextDate) - parseLocalDate(b.nextDate));
+    return { overdueByLevel, today: todayList, upcoming: upcomingList };
+  }, [records, rules]);
 
   const groupedByDate = useMemo(() => {
+    if (groupMode === 'auto') {
+      return filteredRecords.reduce((acc, item) => {
+        const autoGroup = getAutoGroupForVaccine(item.vaccine, rules);
+        let key;
+        if (autoGroup === 'vaccine') {
+          key = item.vaccine || '未分类';
+        } else if (autoGroup === 'status') {
+          key = item.status || '未知';
+        } else if (autoGroup === 'overdue') {
+          if (isOverdue(item.nextDate)) {
+            const diff = Math.abs(daysDiff(item.nextDate));
+            const level = getOverdueLevel(diff, item.vaccine, rules);
+            key = level ? level.label : '逾期';
+          } else if (isToday(item.nextDate)) {
+            key = '今日到期';
+          } else {
+            key = '即将到期';
+          }
+        } else {
+          key = item[appConfig.dateKey] || item.date || item.enrollDate || '未排期';
+        }
+        (acc[key] ||= []).push(item);
+        return acc;
+      }, {});
+    } else if (groupMode === 'vaccine') {
+      return filteredRecords.reduce((acc, item) => {
+        const key = item.vaccine || '未分类';
+        (acc[key] ||= []).push(item);
+        return acc;
+      }, {});
+    } else if (groupMode === 'status') {
+      return filteredRecords.reduce((acc, item) => {
+        const key = item.status || '未知';
+        (acc[key] ||= []).push(item);
+        return acc;
+      }, {});
+    } else if (groupMode === 'overdue') {
+      return filteredRecords.reduce((acc, item) => {
+        let key;
+        if (isOverdue(item.nextDate)) {
+          const diff = Math.abs(daysDiff(item.nextDate));
+          const level = getOverdueLevel(diff, item.vaccine, rules);
+          key = level ? level.label : '逾期';
+        } else if (isToday(item.nextDate)) {
+          key = '今日到期';
+        } else {
+          key = '即将到期';
+        }
+        (acc[key] ||= []).push(item);
+        return acc;
+      }, {});
+    }
     return filteredRecords.reduce((acc, item) => {
       const key = item[appConfig.dateKey] || item.date || item.enrollDate || '未排期';
       (acc[key] ||= []).push(item);
       return acc;
     }, {});
-  }, [filteredRecords]);
+  }, [filteredRecords, rules, groupMode]);
 
   const calendarRecords = useMemo(() => {
     return records
@@ -1439,6 +1824,13 @@ function App() {
           <Settings size={16} />
           复种周期模板
         </button>
+        <button
+          className={`view-tab ${currentView === 'rules' ? 'active' : ''}`}
+          onClick={() => { setCurrentView('rules'); setSelected(null); setSelectedOwner(null); setSelectedCalendarDay(null); }}
+        >
+          <Zap size={16} />
+          提醒规则引擎
+        </button>
       </div>
 
       <section className="metrics">
@@ -1471,6 +1863,21 @@ function App() {
               }).reduce((sum, [, items]) => sum + items.filter(i => i.status === '已接种').length, 0)}</strong>
             </article>
           </>
+        ) : currentView === 'rules' ? (
+          <>
+            <article className="metric">
+              <span>规则数量</span>
+              <strong>{rules.length}</strong>
+            </article>
+            <article className="metric">
+              <span>覆盖疫苗</span>
+              <strong>{rules.filter(r => appConfig.fields.find(f => f.key === 'vaccine').options.includes(r.vaccine)).length}/{appConfig.fields.find(f => f.key === 'vaccine').options.length}</strong>
+            </article>
+            <article className="metric">
+              <span>逾期分级总数</span>
+              <strong>{rules.reduce((sum, r) => sum + (r.overdueLevels || []).length, 0)}</strong>
+            </article>
+          </>
         ) : (
           <>
             <article className="metric">
@@ -1496,47 +1903,60 @@ function App() {
             <h2>今日联系清单</h2>
           </div>
           <div className="contact-groups">
-            <div className="contact-group overdue-group">
-              <div className="contact-group-header">
-                <div className="contact-group-title">
-                  <AlertCircle size={16} className="contact-group-icon overdue-icon" />
-                  <h3>已逾期</h3>
-                  <span className="contact-count">{contactListGroups.overdue.length}</span>
+            {Object.entries(contactListGroups.overdueByLevel).length > 0 ? (
+              Object.entries(contactListGroups.overdueByLevel).map(([levelLabel, items]) => (
+                <div className={`contact-group overdue-group overdue-level-${items[0]?.overdueLevel?.level ?? 0}`} key={levelLabel}>
+                  <div className="contact-group-header">
+                    <div className="contact-group-title">
+                      <AlertCircle size={16} className="contact-group-icon overdue-icon" />
+                      <h3>{levelLabel}</h3>
+                      <span className="contact-count">{items.length}</span>
+                    </div>
+                  </div>
+                  <div className="contact-records">
+                    {items.map((item) => (
+                      <article className={'contact-record ' + (item.status === '已联系' ? 'contact-record-done' : '')} key={item.id}>
+                        <div className="contact-record-main">
+                          <div className="contact-record-info">
+                            <h4>{item.pet}</h4>
+                            <p className="contact-meta">{item.ownerPhone}</p>
+                            <p className="contact-vaccine">{item.vaccine}</p>
+                          </div>
+                          <div className="contact-record-side">
+                            <span className={'status ' + statusClass(item.status)}>{item.status}</span>
+                            <span className={`days-badge overdue-badge level-badge-${item.overdueLevel?.level ?? 0}`}>逾期{item.overdueDays}天</span>
+                          </div>
+                        </div>
+                        <div className="contact-actions">
+                          {item.status === '已联系' ? (
+                            <button className="mark-contact-btn revert-btn" type="button" onClick={() => updateStatus(item.id, '待联系')}>
+                              <RotateCcw size={14} />重新标记为待联系
+                            </button>
+                          ) : (
+                            <button className="mark-contact-btn" type="button" onClick={() => updateStatus(item.id, '已联系')}>
+                              <CheckCircle2 size={14} />标记已联系
+                            </button>
+                          )}
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="contact-group overdue-group">
+                <div className="contact-group-header">
+                  <div className="contact-group-title">
+                    <AlertCircle size={16} className="contact-group-icon overdue-icon" />
+                    <h3>已逾期</h3>
+                    <span className="contact-count">0</span>
+                  </div>
+                </div>
+                <div className="contact-records">
+                  <p className="empty-group">暂无逾期记录</p>
                 </div>
               </div>
-              <div className="contact-records">
-                {contactListGroups.overdue.length === 0 ? (
-                  <p className="empty-group">暂无逾期记录</p>
-                ) : (
-                  contactListGroups.overdue.map((item) => (
-                    <article className={'contact-record ' + (item.status === '已联系' ? 'contact-record-done' : '')} key={item.id}>
-                      <div className="contact-record-main">
-                        <div className="contact-record-info">
-                          <h4>{item.pet}</h4>
-                          <p className="contact-meta">{item.ownerPhone}</p>
-                          <p className="contact-vaccine">{item.vaccine}</p>
-                        </div>
-                        <div className="contact-record-side">
-                          <span className={'status ' + statusClass(item.status)}>{item.status}</span>
-                          <span className="days-badge overdue-badge">逾期{Math.abs(daysDiff(item.nextDate))}天</span>
-                        </div>
-                      </div>
-                      <div className="contact-actions">
-                        {item.status === '已联系' ? (
-                          <button className="mark-contact-btn revert-btn" type="button" onClick={() => updateStatus(item.id, '待联系')}>
-                            <RotateCcw size={14} />重新标记为待联系
-                          </button>
-                        ) : (
-                          <button className="mark-contact-btn" type="button" onClick={() => updateStatus(item.id, '已联系')}>
-                            <CheckCircle2 size={14} />标记已联系
-                          </button>
-                        )}
-                      </div>
-                    </article>
-                  ))
-                )}
-              </div>
-            </div>
+            )}
 
             <div className="contact-group today-group">
               <div className="contact-group-header">
@@ -1584,7 +2004,7 @@ function App() {
               <div className="contact-group-header">
                 <div className="contact-group-title">
                   <CalendarCheck size={16} className="contact-group-icon upcoming-icon" />
-                  <h3>未来7天内</h3>
+                  <h3>即将到期</h3>
                   <span className="contact-count">{contactListGroups.upcoming.length}</span>
                 </div>
               </div>
@@ -1740,7 +2160,7 @@ function App() {
                             {isToday(pet.nextDate) && pet.status === '待联系' && (
                               <span className="days-badge today-badge">今天</span>
                             )}
-                            {isWithin7DaysExcludingToday(pet.nextDate) && pet.status === '待联系' && (
+                            {isWithinAdvanceDays(pet, rules) && pet.status === '待联系' && (
                               <span className="days-badge upcoming-badge">{daysDiff(pet.nextDate)}天后</span>
                             )}
                           </div>
@@ -1911,6 +2331,148 @@ function App() {
               <CheckCircle2 size={16} />
               修复缺失的提醒日期
             </button>
+          </div>
+        </section>
+      )}
+
+      {currentView === 'rules' && (
+        <section className="rules-section">
+          <div className="rules-layout">
+            <div className="panel rules-form-panel">
+              <div className="panel-title">
+                <Zap size={18} />
+                <h2>提醒规则引擎</h2>
+              </div>
+              <p className="hint">为不同疫苗类型配置提醒规则：提前提醒天数决定"即将到期"范围，逾期分级决定逾期严重程度划分，默认联系状态决定新增记录初始状态，自动分组规则决定分组视图默认分组方式。</p>
+              <form className="rules-form" onSubmit={addRule}>
+                <label>
+                  <span>疫苗类型</span>
+                  <select value={ruleForm.vaccine} onChange={(e) => setRuleForm({ ...ruleForm, vaccine: e.target.value })} disabled={!!editingRule}>
+                    <option value="">选择疫苗</option>
+                    {appConfig.fields.find(f => f.key === 'vaccine').options.map((o) => <option key={o}>{o}</option>)}
+                  </select>
+                </label>
+                <label>
+                  <span>提前提醒天数</span>
+                  <input type="number" min="1" value={ruleForm.advanceDays} onChange={(e) => setRuleForm({ ...ruleForm, advanceDays: e.target.value })} placeholder="7" />
+                  <span className="field-hint">距下次提醒日期多少天内显示为"即将到期"</span>
+                </label>
+                <label>
+                  <span>默认联系状态</span>
+                  <select value={ruleForm.defaultStatus} onChange={(e) => setRuleForm({ ...ruleForm, defaultStatus: e.target.value })}>
+                    {appConfig.statuses.map((s) => <option key={s}>{s}</option>)}
+                  </select>
+                  <span className="field-hint">新增该疫苗记录时的默认状态</span>
+                </label>
+                <label>
+                  <span>自动分组规则</span>
+                  <select value={ruleForm.autoGroup} onChange={(e) => setRuleForm({ ...ruleForm, autoGroup: e.target.value })}>
+                    <option value="overdue">按逾期等级</option>
+                    <option value="vaccine">按疫苗类型</option>
+                    <option value="status">按联系状态</option>
+                  </select>
+                  <span className="field-hint">分组视图为"按规则引擎"时每条记录使用的分组方式</span>
+                </label>
+                <div className="overdue-levels-config">
+                  <div className="overdue-levels-header">
+                    <span>逾期分级</span>
+                    <button type="button" className="add-level-btn" onClick={addOverdueLevelToForm}>
+                      <PlusCircle size={14} />添加等级
+                    </button>
+                  </div>
+                  <div className="overdue-levels-list">
+                    {ruleForm.overdueLevels.map((ol, idx) => (
+                      <div className="overdue-level-row" key={ol.id}>
+                        <input
+                          type="text"
+                          value={ol.label}
+                          onChange={(e) => updateOverdueLevelInForm(ol.id, 'label', e.target.value)}
+                          placeholder="等级名称"
+                          className="level-label-input"
+                        />
+                        <span className="level-range-label">{idx === 0 ? '逾期' : ''} ≥</span>
+                        <input
+                          type="number"
+                          min="1"
+                          value={ol.min}
+                          onChange={(e) => updateOverdueLevelInForm(ol.id, 'min', e.target.value)}
+                          className="level-num-input"
+                        />
+                        <span className="level-range-label">天</span>
+                        <span className="level-range-label">且 ≤</span>
+                        <input
+                          type="number"
+                          min="1"
+                          value={ol.max}
+                          onChange={(e) => updateOverdueLevelInForm(ol.id, 'max', e.target.value)}
+                          className="level-num-input"
+                        />
+                        <span className="level-range-label">天</span>
+                        {ruleForm.overdueLevels.length > 1 && (
+                          <button type="button" className="remove-level-btn" onClick={() => removeOverdueLevelFromForm(ol.id)}>
+                            <MinusCircle size={14} />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="rules-form-actions">
+                  <button className="primary" type="submit" disabled={!ruleForm.vaccine || !ruleForm.advanceDays || Number(ruleForm.advanceDays) <= 0}>
+                    <Save size={16} />
+                    {editingRule ? '保存修改' : '添加规则'}
+                  </button>
+                  {editingRule && (
+                    <button type="button" className="btn-secondary" onClick={cancelEditRule}>取消</button>
+                  )}
+                </div>
+              </form>
+              <div className="rules-restore">
+                <button type="button" className="restore-btn" onClick={restoreDefaultRules}>
+                  <RotateCcw size={14} />
+                  恢复默认规则
+                </button>
+              </div>
+            </div>
+
+            <div className="panel rules-list-panel">
+              <div className="panel-title">
+                <ClipboardList size={18} />
+                <h2>规则列表</h2>
+                <span className="template-count">{rules.length}</span>
+              </div>
+              <div className="rules-list">
+                {rules.length === 0 ? (
+                  <p className="empty-group">暂无规则，请添加</p>
+                ) : (
+                  rules.map((rule) => (
+                    <article className="rule-item" key={rule.id}>
+                      <div className="rule-item-main">
+                        <div className="rule-item-header">
+                          <span className="rule-vaccine-tag">{rule.vaccine}</span>
+                          <span className="rule-advance-tag">提前{rule.advanceDays}天</span>
+                          <span className="rule-status-tag">{rule.defaultStatus}</span>
+                          <span className="rule-group-tag">{rule.autoGroup === 'overdue' ? '按逾期等级' : rule.autoGroup === 'vaccine' ? '按疫苗类型' : '按联系状态'}</span>
+                        </div>
+                        <div className="rule-item-levels">
+                          {(rule.overdueLevels || []).map((ol, idx) => (
+                            <span key={ol.id || idx} className={`rule-level-tag level-tag-${idx}`}>{ol.label}({ol.min}-{ol.max === 9999 ? '∞' : ol.max}天)</span>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="rule-item-actions">
+                        <button type="button" onClick={() => startEditRule(rule)} title="编辑">
+                          <Edit3 size={14} />
+                        </button>
+                        <button type="button" className="ghost-danger" onClick={() => removeRule(rule.id)} title="删除">
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </article>
+                  ))
+                )}
+              </div>
+            </div>
           </div>
         </section>
       )}
@@ -2098,6 +2660,10 @@ function App() {
                           if (!nextDateManual) {
                             next.nextDate = newAutoNext || '';
                           }
+                          if (field.key === 'vaccine') {
+                            const ruleDefault = getDefaultStatusForVaccine(event.target.value, rules);
+                            next.status = ruleDefault;
+                          }
                           setForm(next);
                         }}>
                           {field.options.map((option) => <option key={option}>{option}</option>)}
@@ -2206,6 +2772,17 @@ function App() {
                 <CalendarDays size={18} />
                 <h2>{appConfig.directory ? '证据目录预览' : appConfig.board ? '床位看板' : '分组视图'}</h2>
               </div>
+              {!appConfig.directory && !appConfig.board && (
+                <div className="group-mode-selector">
+                  <Filter size={14} />
+                  <span>分组方式：</span>
+                  <button type="button" className={`group-mode-btn ${groupMode === 'auto' ? 'active' : ''}`} onClick={() => setGroupMode('auto')}>按规则引擎</button>
+                  <button type="button" className={`group-mode-btn ${groupMode === 'overdue' ? 'active' : ''}`} onClick={() => setGroupMode('overdue')}>按逾期等级</button>
+                  <button type="button" className={`group-mode-btn ${groupMode === 'vaccine' ? 'active' : ''}`} onClick={() => setGroupMode('vaccine')}>按疫苗类型</button>
+                  <button type="button" className={`group-mode-btn ${groupMode === 'status' ? 'active' : ''}`} onClick={() => setGroupMode('status')}>按联系状态</button>
+                  <button type="button" className={`group-mode-btn ${groupMode === 'date' ? 'active' : ''}`} onClick={() => setGroupMode('date')}>按日期</button>
+                </div>
+              )}
               {appConfig.directory ? (
                 <div className="directory">
                   {Object.entries(directory).map(([issue, items]) => (
