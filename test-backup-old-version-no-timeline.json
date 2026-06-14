@@ -1,0 +1,19 @@
+[
+  {
+    "pet": "旧版猫1",
+    "species": "猫",
+    "ownerPhone": "13900001111",
+    "vaccine": "猫三联",
+    "lastDate": "2026-01-15",
+    "nextDate": "2027-01-15",
+    "status": "待联系"
+  },
+  {
+    "pet": "旧版狗1",
+    "species": "犬",
+    "ownerPhone": "13900002222",
+    "vaccine": "狂犬",
+    "lastDate": "2026-02-15",
+    "nextDate": "2027-02-15"
+  }
+]

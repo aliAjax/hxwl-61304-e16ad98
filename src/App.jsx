@@ -313,6 +313,12 @@ function App() {
   const [importPreview, setImportPreview] = useState(null);
   const [importFile, setImportFile] = useState(null);
   const fileInputRef = useRef(null);
+  const [showBackupRestoreModal, setShowBackupRestoreModal] = useState(false);
+  const [backupRestoreStep, setBackupRestoreStep] = useState('main');
+  const [restorePreview, setRestorePreview] = useState(null);
+  const [restoreFile, setRestoreFile] = useState(null);
+  const [restoreError, setRestoreError] = useState(null);
+  const restoreFileInputRef = useRef(null);
   const [currentView, setCurrentView] = useState('records');
   const [ownerSearch, setOwnerSearch] = useState('');
   const [selectedOwner, setSelectedOwner] = useState(null);
@@ -756,6 +762,332 @@ function App() {
     setImportFile(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
+    }
+  }
+
+  function exportToJSON() {
+    const exportData = {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      appId: appConfig.id,
+      storageKey: appConfig.storage,
+      recordCount: records.length,
+      records: records
+    };
+    const jsonStr = JSON.stringify(exportData, null, 2);
+    const blob = new Blob([jsonStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    const dateStr = formatLocalDate(new Date());
+    link.download = `宠物疫苗提醒数据_${dateStr}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+
+  function validateRestoreData(data) {
+    const errors = [];
+    const warnings = [];
+    let recordsToProcess = [];
+
+    if (!data || typeof data !== 'object') {
+      errors.push('文件格式错误：不是有效的JSON对象');
+      return { valid: false, errors, warnings, records: [] };
+    }
+
+    if (data.records && Array.isArray(data.records)) {
+      recordsToProcess = data.records;
+      if (data.appId && data.appId !== appConfig.id) {
+        warnings.push(`备份文件来自不同应用(${data.appId})，可能存在字段不兼容`);
+      }
+      if (data.version && data.version > 1) {
+        warnings.push(`备份文件版本(${data.version})高于当前版本，部分字段可能无法识别`);
+      }
+    } else if (Array.isArray(data)) {
+      recordsToProcess = data;
+      warnings.push('备份文件为旧版本格式（直接数组），正在自动转换');
+    } else {
+      errors.push('文件格式错误：未找到记录数据');
+      return { valid: false, errors, warnings, records: [] };
+    }
+
+    if (recordsToProcess.length === 0) {
+      warnings.push('备份文件中没有记录');
+    }
+
+    const requiredFields = ['pet', 'ownerPhone', 'vaccine', 'nextDate'];
+    const validRecords = [];
+    const invalidRecords = [];
+    let migratedCount = 0;
+
+    recordsToProcess.forEach((record, index) => {
+      const recordErrors = [];
+      const recordWarnings = [];
+
+      if (!record || typeof record !== 'object') {
+        invalidRecords.push({ index, error: '不是有效的对象' });
+        return;
+      }
+
+      requiredFields.forEach(field => {
+        if (!record[field] || String(record[field]).trim() === '') {
+          const fieldLabel = appConfig.fields.find(f => f.key === field)?.label || field;
+          recordErrors.push(`缺少必填字段：${fieldLabel}`);
+        }
+      });
+
+      if (record.ownerPhone && !isValidPhone(record.ownerPhone)) {
+        recordErrors.push(`联系方式格式不正确：${record.ownerPhone}`);
+      }
+
+      if (record.nextDate && !isValidDate(record.nextDate)) {
+        recordErrors.push(`下次提醒日期格式不正确：${record.nextDate}`);
+      }
+
+      if (record.lastDate && !isValidDate(record.lastDate)) {
+        recordWarnings.push(`上次接种日期格式不正确，将忽略：${record.lastDate}`);
+      }
+
+      const migratedRecord = { ...record };
+      let needsMigration = false;
+
+      if (!migratedRecord.timeline || !Array.isArray(migratedRecord.timeline) || migratedRecord.timeline.length === 0) {
+        migratedRecord.timeline = [{
+          status: migratedRecord.status || appConfig.primaryStatus,
+          at: today,
+          by: '数据迁移'
+        }];
+        needsMigration = true;
+      }
+
+      if (!migratedRecord.notes || !Array.isArray(migratedRecord.notes)) {
+        migratedRecord.notes = [];
+        needsMigration = true;
+      }
+
+      if (!migratedRecord.status) {
+        migratedRecord.status = appConfig.primaryStatus;
+        needsMigration = true;
+      }
+
+      if (!migratedRecord.id) {
+        migratedRecord.id = uid();
+        needsMigration = true;
+      }
+
+      if (migratedRecord.lastDate && !isValidDate(migratedRecord.lastDate)) {
+        migratedRecord.lastDate = '';
+        needsMigration = true;
+      }
+
+      if (migratedRecord.nextDate && isValidDate(migratedRecord.nextDate)) {
+        migratedRecord.nextDate = normalizeDate(migratedRecord.nextDate);
+        if (migratedRecord.nextDate !== record.nextDate) needsMigration = true;
+      }
+
+      if (migratedRecord.ownerPhone) {
+        const normalizedPhone = normalizePhone(migratedRecord.ownerPhone);
+        if (normalizedPhone !== migratedRecord.ownerPhone) {
+          migratedRecord.ownerPhone = normalizedPhone;
+          needsMigration = true;
+        }
+      }
+
+      if (needsMigration) migratedCount++;
+
+      if (recordErrors.length > 0) {
+        invalidRecords.push({ index, errors: recordErrors, warnings: recordWarnings, record });
+      } else {
+        validRecords.push({ record: migratedRecord, warnings: recordWarnings });
+      }
+    });
+
+    if (migratedCount > 0) {
+      warnings.push(`已自动迁移 ${migratedCount} 条旧版本记录（补充timeline等字段）`);
+    }
+
+    if (invalidRecords.length > 0) {
+      errors.push(`${invalidRecords.length} 条记录存在错误，将被跳过`);
+    }
+
+    return {
+      valid: errors.filter(e => !e.includes('条记录存在错误')).length === 0,
+      errors,
+      warnings,
+      validRecords: validRecords.map(v => v.record),
+      invalidRecords,
+      allWarnings: [
+        ...warnings,
+        ...validRecords.flatMap((v, i) => v.warnings.map(w => `记录${i + 1}：${w}`))
+      ]
+    };
+  }
+
+  function calculateRestoreChanges(validRecords) {
+    const existingIds = new Set(records.map(r => r.id));
+    const existingKeyMap = new Map();
+    records.forEach(r => {
+      const key = `${normalizePhone(r.ownerPhone)}-${r.pet}-${r.vaccine}`;
+      existingKeyMap.set(key, r);
+    });
+
+    let addCount = 0;
+    let overwriteCount = 0;
+    let skipCount = 0;
+    const addRecords = [];
+    const overwriteRecords = [];
+    const skipRecords = [];
+
+    validRecords.forEach(record => {
+      const normalizedRecord = {
+        ...record,
+        ownerPhone: normalizePhone(record.ownerPhone),
+        lastDate: record.lastDate && isValidDate(record.lastDate) ? normalizeDate(record.lastDate) : '',
+        nextDate: normalizeDate(record.nextDate)
+      };
+
+      if (existingIds.has(record.id)) {
+        overwriteCount++;
+        overwriteRecords.push({
+          newRecord: normalizedRecord,
+          existingRecord: records.find(r => r.id === record.id)
+        });
+      } else {
+        const key = `${normalizedRecord.ownerPhone}-${normalizedRecord.pet}-${normalizedRecord.vaccine}`;
+        const existingByKey = existingKeyMap.get(key);
+        if (existingByKey) {
+          skipCount++;
+          skipRecords.push({
+            newRecord: normalizedRecord,
+            existingRecord: existingByKey,
+            reason: '已存在相同宠物+疫苗的记录'
+          });
+        } else {
+          addCount++;
+          addRecords.push(normalizedRecord);
+        }
+      }
+    });
+
+    return {
+      addCount,
+      overwriteCount,
+      skipCount,
+      addRecords,
+      overwriteRecords,
+      skipRecords,
+      totalValid: validRecords.length
+    };
+  }
+
+  function processRestoreFile(file) {
+    setRestoreError(null);
+    setRestorePreview(null);
+
+    if (!file.name.endsWith('.json') && file.type !== 'application/json') {
+      setRestoreError({ type: 'format', message: '请上传JSON格式的备份文件' });
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const text = e.target.result;
+        let data;
+        try {
+          data = JSON.parse(text);
+        } catch (parseError) {
+          setRestoreError({ type: 'format', message: 'JSON解析失败，请检查文件格式是否正确' });
+          return;
+        }
+
+        const validation = validateRestoreData(data);
+
+        if (!validation.valid && validation.validRecords.length === 0) {
+          setRestoreError({
+            type: 'validation',
+            message: validation.errors.join('；'),
+            details: validation
+          });
+          return;
+        }
+
+        const changes = calculateRestoreChanges(validation.validRecords);
+
+        setRestoreFile(file);
+        setRestorePreview({
+          fileName: file.name,
+          fileSize: (file.size / 1024).toFixed(2),
+          exportedAt: data.exportedAt || null,
+          version: data.version || 0,
+          validation,
+          changes
+        });
+        setBackupRestoreStep('preview');
+      } catch (error) {
+        setRestoreError({ type: 'unknown', message: '处理文件时发生未知错误' });
+        console.error(error);
+      }
+    };
+    reader.onerror = () => {
+      setRestoreError({ type: 'io', message: '读取文件失败' });
+    };
+    reader.readAsText(file, 'UTF-8');
+  }
+
+  function handleRestoreFileUpload(e) {
+    const file = e.target.files?.[0];
+    if (file) {
+      processRestoreFile(file);
+    }
+  }
+
+  function handleRestoreDrop(e) {
+    e.preventDefault();
+    const file = e.dataTransfer.files?.[0];
+    if (file) {
+      processRestoreFile(file);
+    } else {
+      setRestoreError({ type: 'format', message: '请上传JSON格式的备份文件' });
+    }
+  }
+
+  function handleRestoreDragOver(e) {
+    e.preventDefault();
+  }
+
+  function confirmRestore() {
+    if (!restorePreview) return;
+
+    const { changes } = restorePreview;
+    const mergedRecords = [...records];
+
+    changes.overwriteRecords.forEach(({ newRecord }) => {
+      const idx = mergedRecords.findIndex(r => r.id === newRecord.id);
+      if (idx !== -1) {
+        mergedRecords[idx] = newRecord;
+      }
+    });
+
+    changes.addRecords.forEach(newRecord => {
+      mergedRecords.unshift(newRecord);
+    });
+
+    persist(mergedRecords);
+    cancelRestore();
+    alert(`恢复完成：\n新增 ${changes.addCount} 条\n覆盖 ${changes.overwriteCount} 条\n跳过 ${changes.skipCount} 条`);
+  }
+
+  function cancelRestore() {
+    setShowBackupRestoreModal(false);
+    setBackupRestoreStep('main');
+    setRestorePreview(null);
+    setRestoreFile(null);
+    setRestoreError(null);
+    if (restoreFileInputRef.current) {
+      restoreFileInputRef.current.value = '';
     }
   }
 
@@ -1708,6 +2040,7 @@ function App() {
               </div>
               <button className="primary" type="submit"><Plus size={18} />新增</button>
               <button type="button" className="import-btn" onClick={() => setShowImportModal(true)}><Upload size={18} />批量导入CSV</button>
+              <button type="button" className="import-btn" onClick={() => { setShowBackupRestoreModal(true); setBackupRestoreStep('main'); }}><Save size={18} />数据备份与恢复</button>
               <p className="hint">{appConfig.note}</p>
             </form>
 
@@ -2085,6 +2418,309 @@ function App() {
                 >
                   <CheckCircle2 size={16} />
                   确认导入 {importPreview.validRows.length} 条记录
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {showBackupRestoreModal && (
+        <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && cancelRestore()}>
+          <div className="modal-content import-modal">
+            <div className="modal-header">
+              <div className="modal-title">
+                <Save size={20} />
+                <h2>数据备份与恢复</h2>
+              </div>
+              <button type="button" className="modal-close" onClick={cancelRestore}>
+                <X size={20} />
+              </button>
+            </div>
+
+            {backupRestoreStep === 'main' && (
+              <div className="modal-body">
+                <div className="backup-restore-options">
+                  <div className="backup-restore-card export-card">
+                    <div className="card-icon">
+                      <FileText size={32} />
+                    </div>
+                    <h3>导出数据</h3>
+                    <p>将当前所有宠物疫苗提醒数据导出为JSON备份文件，包含完整的记录、时间线和备注信息。</p>
+                    <div className="record-count-info">
+                      共 <strong>{records.length}</strong> 条记录将被导出
+                    </div>
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      onClick={() => {
+                        exportToJSON();
+                        cancelRestore();
+                      }}
+                    >
+                      <FileText size={16} />
+                      导出JSON文件
+                    </button>
+                  </div>
+
+                  <div className="backup-restore-card import-card">
+                    <div className="card-icon">
+                      <Upload size={32} />
+                    </div>
+                    <h3>恢复数据</h3>
+                    <p>选择之前导出的JSON备份文件恢复数据。恢复前将展示变更统计，确认后才会执行。</p>
+                    <p className="warning-text">
+                      <AlertTriangle size={14} />
+                      注意：ID相同的记录将被覆盖，已存在相同宠物+疫苗的记录将被跳过
+                    </p>
+                    <div
+                      className="drop-zone"
+                      onDrop={handleRestoreDrop}
+                      onDragOver={handleRestoreDragOver}
+                      onClick={() => restoreFileInputRef.current?.click()}
+                    >
+                      <Upload size={24} />
+                      <p>点击或拖拽JSON文件到此处</p>
+                      <p className="drop-hint">仅支持 .json 格式文件</p>
+                      <input
+                        ref={restoreFileInputRef}
+                        type="file"
+                        accept=".json,application/json"
+                        style={{ display: 'none' }}
+                        onChange={handleRestoreFileUpload}
+                      />
+                    </div>
+
+                    {restoreError && (
+                      <div className="error-message">
+                        <AlertOctagon size={16} />
+                        <span>{restoreError.message}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {backupRestoreStep === 'preview' && restorePreview && (
+              <div className="modal-body">
+                <button
+                  type="button"
+                  className="back-btn"
+                  onClick={() => {
+                    setBackupRestoreStep('main');
+                    setRestorePreview(null);
+                    setRestoreFile(null);
+                    setRestoreError(null);
+                    if (restoreFileInputRef.current) {
+                      restoreFileInputRef.current.value = '';
+                    }
+                  }}
+                >
+                  <ArrowLeft size={16} />
+                  返回
+                </button>
+
+                <div className="restore-file-info">
+                  <h3>文件信息</h3>
+                  <div className="info-grid">
+                    <div className="info-item">
+                      <span className="info-label">文件名</span>
+                      <span className="info-value">{restorePreview.fileName}</span>
+                    </div>
+                    <div className="info-item">
+                      <span className="info-label">文件大小</span>
+                      <span className="info-value">{restorePreview.fileSize} KB</span>
+                    </div>
+                    {restorePreview.exportedAt && (
+                      <div className="info-item">
+                        <span className="info-label">导出时间</span>
+                        <span className="info-value">
+                          {new Date(restorePreview.exportedAt).toLocaleString('zh-CN')}
+                        </span>
+                      </div>
+                    )}
+                    <div className="info-item">
+                      <span className="info-label">数据版本</span>
+                      <span className="info-value">v{restorePreview.version}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {restorePreview.validation.warnings.length > 0 && (
+                  <div className="warnings-section">
+                    <h3><AlertTriangle size={16} className="warning-icon" />警告</h3>
+                    <ul className="warnings-list">
+                      {restorePreview.validation.allWarnings.slice(0, 10).map((warning, i) => (
+                        <li key={i}>{warning}</li>
+                      ))}
+                      {restorePreview.validation.allWarnings.length > 10 && (
+                        <li>... 还有 {restorePreview.validation.allWarnings.length - 10} 条警告</li>
+                      )}
+                    </ul>
+                  </div>
+                )}
+
+                {restorePreview.validation.invalidRecords.length > 0 && (
+                  <div className="errors-section">
+                    <h3><AlertOctagon size={16} className="error-icon" />无效记录（{restorePreview.validation.invalidRecords.length} 条）</h3>
+                    <div className="invalid-records-list">
+                      {restorePreview.validation.invalidRecords.slice(0, 5).map((item, i) => (
+                        <div key={i} className="invalid-record-item">
+                          <span className="record-index">第 {item.index + 1} 条：</span>
+                          <span className="record-error">{item.errors.join('；')}</span>
+                        </div>
+                      ))}
+                      {restorePreview.validation.invalidRecords.length > 5 && (
+                        <p className="more-errors">... 还有 {restorePreview.validation.invalidRecords.length - 5} 条无效记录</p>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                <div className="restore-summary">
+                  <h3><Info size={16} />恢复统计</h3>
+                  <div className="summary-cards">
+                    <div className="summary-card add-card">
+                      <div className="summary-icon add-icon">
+                        <Plus size={24} />
+                      </div>
+                      <div className="summary-content">
+                        <span className="summary-label">新增记录</span>
+                        <span className="summary-value">{restorePreview.changes.addCount}</span>
+                      </div>
+                    </div>
+                    <div className="summary-card overwrite-card">
+                      <div className="summary-icon overwrite-icon">
+                        <Edit3 size={24} />
+                      </div>
+                      <div className="summary-content">
+                        <span className="summary-label">覆盖记录</span>
+                        <span className="summary-value">{restorePreview.changes.overwriteCount}</span>
+                      </div>
+                    </div>
+                    <div className="summary-card skip-card">
+                      <div className="summary-icon skip-icon">
+                        <X size={24} />
+                      </div>
+                      <div className="summary-content">
+                        <span className="summary-label">跳过记录</span>
+                        <span className="summary-value">{restorePreview.changes.skipCount}</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="summary-total">
+                    有效记录：{restorePreview.changes.totalValid} 条 / 当前记录：{records.length} 条
+                  </div>
+                </div>
+
+                {restorePreview.changes.overwriteCount > 0 && (
+                  <div className="overwrite-preview-section">
+                    <h3><AlertTriangle size={16} className="warning-icon" />将被覆盖的记录（前5条）</h3>
+                    <div className="overwrite-table-container">
+                      <table className="preview-table">
+                        <thead>
+                          <tr>
+                            <th>宠物姓名</th>
+                            <th>联系方式</th>
+                            <th>疫苗类型</th>
+                            <th>当前状态</th>
+                            <th>新状态</th>
+                            <th>当前下次提醒</th>
+                            <th>新下次提醒</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {restorePreview.changes.overwriteRecords.slice(0, 5).map((item, i) => (
+                            <tr key={i}>
+                              <td>{item.existingRecord.pet}</td>
+                              <td>{item.existingRecord.ownerPhone}</td>
+                              <td>{item.existingRecord.vaccine}</td>
+                              <td><span className={`status ${statusClass(item.existingRecord.status)}`}>{item.existingRecord.status}</span></td>
+                              <td><span className={`status ${statusClass(item.newRecord.status)}`}>{item.newRecord.status}</span></td>
+                              <td>{item.existingRecord.nextDate}</td>
+                              <td>{item.newRecord.nextDate}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {restorePreview.changes.addCount > 0 && (
+                  <div className="add-preview-section">
+                    <h3><CheckCircle2 size={16} className="success-icon" />将新增的记录（前5条）</h3>
+                    <div className="preview-table-container">
+                      <table className="preview-table">
+                        <thead>
+                          <tr>
+                            <th>宠物姓名</th>
+                            <th>物种</th>
+                            <th>联系方式</th>
+                            <th>疫苗类型</th>
+                            <th>下次提醒</th>
+                            <th>状态</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {restorePreview.changes.addRecords.slice(0, 5).map((record, i) => (
+                            <tr key={i}>
+                              <td>{record.pet}</td>
+                              <td>{record.species}</td>
+                              <td>{record.ownerPhone}</td>
+                              <td>{record.vaccine}</td>
+                              <td>{record.nextDate}</td>
+                              <td><span className={`status ${statusClass(record.status)}`}>{record.status}</span></td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {restorePreview.changes.skipCount > 0 && (
+                  <div className="skip-preview-section">
+                    <h3><Info size={16} className="info-icon" />将跳过的记录（前5条）</h3>
+                    <div className="skip-table-container">
+                      <table className="preview-table">
+                        <thead>
+                          <tr>
+                            <th>宠物姓名</th>
+                            <th>联系方式</th>
+                            <th>疫苗类型</th>
+                            <th>跳过原因</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {restorePreview.changes.skipRecords.slice(0, 5).map((item, i) => (
+                            <tr key={i}>
+                              <td>{item.newRecord.pet}</td>
+                              <td>{item.newRecord.ownerPhone}</td>
+                              <td>{item.newRecord.vaccine}</td>
+                              <td className="skip-reason">{item.reason}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {backupRestoreStep === 'preview' && restorePreview && (
+              <div className="modal-footer">
+                <button type="button" className="btn-secondary" onClick={cancelRestore}>取消</button>
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={confirmRestore}
+                  disabled={restorePreview.changes.addCount === 0 && restorePreview.changes.overwriteCount === 0}
+                >
+                  <CheckCheck size={16} />
+                  确认恢复（新增 {restorePreview.changes.addCount}，覆盖 {restorePreview.changes.overwriteCount}）
                 </button>
               </div>
             )}

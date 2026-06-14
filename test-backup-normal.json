@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "exportedAt": "2026-06-14T10:00:00.000Z",
+  "appId": "hxwl-61304",
+  "storageKey": "hxwl-61304-pet-vaccine",
+  "recordCount": 3,
+  "records": [
+    {
+      "id": "test-new-1",
+      "pet": "测试猫1",
+      "species": "猫",
+      "ownerPhone": "13800001111",
+      "vaccine": "猫三联",
+      "lastDate": "2026-01-01",
+      "nextDate": "2027-01-01",
+      "status": "待联系",
+      "createdAt": "2026-01-01T00:00:00.000Z",
+      "timeline": [
+        {
+          "status": "待联系",
+          "at": "2026-06-14",
+          "by": "系统"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "id": "test-new-2",
+      "pet": "测试狗1",
+      "species": "犬",
+      "ownerPhone": "13800002222",
+      "vaccine": "狂犬",
+      "lastDate": "2026-02-01",
+      "nextDate": "2027-02-01",
+      "status": "已联系",
+      "createdAt": "2026-02-01T00:00:00.000Z",
+      "timeline": [
+        {
+          "status": "已联系",
+          "at": "2026-06-14",
+          "by": "系统"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "id": "test-new-3",
+      "pet": "测试兔1",
+      "species": "兔",
+      "ownerPhone": "13800003333",
+      "vaccine": "体内驱虫",
+      "lastDate": "2026-03-01",
+      "nextDate": "2026-06-01",
+      "status": "已接种",
+      "createdAt": "2026-03-01T00:00:00.000Z",
+      "timeline": [
+        {
+          "status": "已接种",
+          "at": "2026-06-14",
+          "by": "系统"
+        }
+      ],
+      "notes": []
+    }
+  ]
+}

@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "exportedAt": "2026-06-14T10:00:00.000Z",
+  "appId": "hxwl-61304",
+  "recordCount": 3,
+  "records": [
+    {
+      "id": "existing-id-1",
+      "pet": "奶盖",
+      "species": "猫",
+      "ownerPhone": "13800008888",
+      "vaccine": "猫三联",
+      "lastDate": "2026-05-15",
+      "nextDate": "2026-12-15",
+      "status": "已接种",
+      "timeline": [
+        {
+          "status": "已接种",
+          "at": "2026-06-14",
+          "by": "导入测试"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "pet": "奶盖",
+      "species": "猫",
+      "ownerPhone": "13800008888",
+      "vaccine": "猫三联",
+      "lastDate": "2026-06-01",
+      "nextDate": "2027-06-01",
+      "status": "待联系",
+      "timeline": [
+        {
+          "status": "待联系",
+          "at": "2026-06-14",
+          "by": "导入测试"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "id": "new-id-1",
+      "pet": "新宠物",
+      "species": "猫",
+      "ownerPhone": "13600009999",
+      "vaccine": "猫三联",
+      "lastDate": "2026-06-01",
+      "nextDate": "2027-06-01",
+      "status": "待联系",
+      "timeline": [
+        {
+          "status": "待联系",
+          "at": "2026-06-14",
+          "by": "导入测试"
+        }
+      ],
+      "notes": []
+    }
+  ]
+}

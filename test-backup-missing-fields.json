@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "exportedAt": "2026-06-14T10:00:00.000Z",
+  "appId": "hxwl-61304",
+  "recordCount": 3,
+  "records": [
+    {
+      "id": "bad-1",
+      "pet": "缺少手机号",
+      "species": "猫",
+      "vaccine": "猫三联",
+      "nextDate": "2027-01-01",
+      "status": "待联系"
+    },
+    {
+      "id": "bad-2",
+      "pet": "",
+      "species": "犬",
+      "ownerPhone": "13700001111",
+      "vaccine": "狂犬",
+      "nextDate": "2027-01-01",
+      "status": "待联系"
+    },
+    {
+      "id": "bad-3",
+      "pet": "缺少疫苗",
+      "species": "兔",
+      "ownerPhone": "13700002222",
+      "nextDate": "2027-01-01",
+      "status": "待联系"
+    },
+    {
+      "id": "good-1",
+      "pet": "有效记录",
+      "species": "猫",
+      "ownerPhone": "13700003333",
+      "vaccine": "猫三联",
+      "nextDate": "2027-01-01",
+      "status": "待联系"
+    }
+  ]
+}
