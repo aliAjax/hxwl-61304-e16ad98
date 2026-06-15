@@ -1,5 +1,5 @@
-import { useMemo, useState, useRef, useEffect, useCallback } from 'react';
-import { Syringe, Plus, Search, Trash2, RotateCcw, CheckCircle2, AlertTriangle, ClipboardList, CalendarDays, PhoneCall, Clock, AlertCircle, CalendarCheck, MessageSquareText, X, User, Calendar, Upload, FileText, AlertOctagon, CheckCheck, Info, Users, PawPrint, ArrowLeft, ChevronRight, Settings, Save, Edit3, Zap, Filter, PlusCircle, MinusCircle, Building2, Copy, Download, MoreHorizontal, GitBranch, Link2, Link2Off, History, ShieldCheck, RefreshCw } from 'lucide-react';
+import { useMemo, useState, useRef } from 'react';
+import { Syringe, Plus, Search, Trash2, RotateCcw, CheckCircle2, AlertTriangle, ClipboardList, CalendarDays, PhoneCall, Clock, AlertCircle, CalendarCheck, MessageSquareText, X, User, Calendar, Upload, FileText, AlertOctagon, CheckCheck, Info, Users, PawPrint, ArrowLeft, ChevronRight, Settings, Save, Edit3, Zap, Filter, PlusCircle, MinusCircle, Building2, Copy, Download, MoreHorizontal } from 'lucide-react';
 import './App.css';
 
 const appConfig = {
@@ -379,317 +379,6 @@ function withIds(items) {
 const STORES_META_KEY = appConfig.storage + '-stores-meta';
 const STORE_DATA_KEY_PREFIX = appConfig.storage + '-store-';
 const STORE_SCHEMA_VERSION = 1;
-const BACKUP_FORMAT_VERSION = 2;
-
-const CROSS_STORE_LINKS_KEY = appConfig.storage + '-cross-store-links';
-const CROSS_STORE_IGNORED_KEY = appConfig.storage + '-cross-store-ignored';
-const CROSS_STORE_AUDIT_KEY = appConfig.storage + '-cross-store-audit';
-
-function loadCrossStoreLinks() {
-  const raw = localStorage.getItem(CROSS_STORE_LINKS_KEY);
-  if (raw) {
-    try { return JSON.parse(raw); } catch { return {}; }
-  }
-  return {};
-}
-
-function persistCrossStoreLinks(links) {
-  localStorage.setItem(CROSS_STORE_LINKS_KEY, JSON.stringify(links));
-}
-
-function loadCrossStoreIgnored() {
-  const raw = localStorage.getItem(CROSS_STORE_IGNORED_KEY);
-  if (raw) {
-    try { return JSON.parse(raw); } catch { return []; }
-  }
-  return [];
-}
-
-function persistCrossStoreIgnored(ignored) {
-  localStorage.setItem(CROSS_STORE_IGNORED_KEY, JSON.stringify(ignored));
-}
-
-function loadCrossStoreAudit() {
-  const raw = localStorage.getItem(CROSS_STORE_AUDIT_KEY);
-  if (raw) {
-    try { return JSON.parse(raw); } catch { return []; }
-  }
-  return [];
-}
-
-function persistCrossStoreAudit(audit) {
-  localStorage.setItem(CROSS_STORE_AUDIT_KEY, JSON.stringify(audit));
-}
-
-function addCrossStoreAuditLog(action, details) {
-  const audit = loadCrossStoreAudit();
-  audit.unshift({
-    id: uid(),
-    action,
-    details,
-    at: new Date().toISOString(),
-    by: '操作员'
-  });
-  persistCrossStoreAudit(audit.slice(0, 500));
-}
-
-function levenshteinDistance(a, b) {
-  if (!a || !b) return Math.max((a || '').length, (b || '').length);
-  const matrix = [];
-  for (let i = 0; i <= b.length; i++) {
-    matrix[i] = [i];
-  }
-  for (let j = 0; j <= a.length; j++) {
-    matrix[0][j] = j;
-  }
-  for (let i = 1; i <= b.length; i++) {
-    for (let j = 1; j <= a.length; j++) {
-      if (b.charAt(i - 1) === a.charAt(j - 1)) {
-        matrix[i][j] = matrix[i - 1][j - 1];
-      } else {
-        matrix[i][j] = Math.min(
-          matrix[i - 1][j - 1] + 1,
-          matrix[i][j - 1] + 1,
-          matrix[i - 1][j] + 1
-        );
-      }
-    }
-  }
-  return matrix[b.length][a.length];
-}
-
-function stringSimilarity(a, b) {
-  if (!a && !b) return 1;
-  if (!a || !b) return 0;
-  const strA = String(a).toLowerCase().trim();
-  const strB = String(b).toLowerCase().trim();
-  if (strA === strB) return 1;
-  const maxLen = Math.max(strA.length, strB.length);
-  if (maxLen === 0) return 1;
-  const distance = levenshteinDistance(strA, strB);
-  return 1 - distance / maxLen;
-}
-
-function normalizePhoneGlobal(phone) {
-  if (!phone) return '';
-  return String(phone).replace(/\s|-/g, '');
-}
-
-function normalizePetName(name) {
-  if (!name) return '';
-  return String(name)
-    .toLowerCase()
-    .trim()
-    .replace(/[\s·・._-]/g, '');
-}
-
-function isPetNameSimilar(a, b, threshold = 0.75) {
-  const normA = normalizePetName(a);
-  const normB = normalizePetName(b);
-  if (!normA || !normB) return false;
-  if (normA === normB) return true;
-  if (normA.includes(normB) || normB.includes(normA)) return true;
-  return stringSimilarity(normA, normB) >= threshold;
-}
-
-function scanAllStoresForDuplicates(currentStoreId) {
-  const meta = loadStoresMeta();
-  if (!meta || !meta.stores || meta.stores.length < 2) {
-    return { groups: [], allRecords: [] };
-  }
-
-  const ignored = loadCrossStoreIgnored();
-  const ignoredKeys = new Set(ignored.map(item => item.groupKey));
-
-  const allRecords = [];
-  meta.stores.forEach(store => {
-    const storeData = loadStoreData(store.id);
-    if (storeData && Array.isArray(storeData.records)) {
-      storeData.records.forEach(record => {
-        allRecords.push({
-          ...record,
-          _storeId: store.id,
-          _storeName: store.name,
-          _isDefault: store.isDefault || false
-        });
-      });
-    }
-  });
-
-  const duplicateGroups = [];
-  const usedRecordKeys = new Set();
-
-  const phoneGroups = {};
-  allRecords.forEach(record => {
-    const phone = normalizePhoneGlobal(record.ownerPhone);
-    if (phone) {
-      if (!phoneGroups[phone]) phoneGroups[phone] = [];
-      phoneGroups[phone].push(record);
-    }
-  });
-
-  Object.entries(phoneGroups).forEach(([phone, records]) => {
-    const storeIds = new Set(records.map(r => r._storeId));
-    if (storeIds.size >= 2) {
-      const groupKey = `phone:${phone}`;
-      if (!ignoredKeys.has(groupKey)) {
-        duplicateGroups.push({
-          id: uid(),
-          key: groupKey,
-          type: 'phone',
-          matchValue: phone,
-          matchLabel: `手机号：${phone}`,
-          records,
-          storeIds: [...storeIds],
-          confidence: 1.0
-        });
-        records.forEach(r => usedRecordKeys.add(`${r._storeId}:${r.id}`));
-      }
-    }
-  });
-
-  for (let i = 0; i < allRecords.length; i++) {
-    for (let j = i + 1; j < allRecords.length; j++) {
-      const r1 = allRecords[i];
-      const r2 = allRecords[j];
-
-      if (r1._storeId === r2._storeId) continue;
-      if (r1.species && r2.species && r1.species !== r2.species) continue;
-
-      const key1 = `${r1._storeId}:${r1.id}`;
-      const key2 = `${r2._storeId}:${r2.id}`;
-
-      const phone1 = normalizePhoneGlobal(r1.ownerPhone);
-      const phone2 = normalizePhoneGlobal(r2.ownerPhone);
-      if (phone1 && phone2 && phone1 === phone2) continue;
-
-      const similarity = stringSimilarity(normalizePetName(r1.pet), normalizePetName(r2.pet));
-      if (similarity >= 0.78) {
-        const groupKey = `pet:${[r1._storeId, r2._storeId].sort().join('-')}:${[r1.id, r2.id].sort().join('-')}`;
-        if (!ignoredKeys.has(groupKey)) {
-          let targetGroup = duplicateGroups.find(g =>
-            g.type === 'pet' && (
-              g.records.some(r => r.id === r1.id && r._storeId === r1._storeId) ||
-              g.records.some(r => r.id === r2.id && r._storeId === r2._storeId)
-            )
-          );
-
-          if (targetGroup) {
-            const hasR1 = targetGroup.records.some(r => r.id === r1.id && r._storeId === r1._storeId);
-            const hasR2 = targetGroup.records.some(r => r.id === r2.id && r._storeId === r2._storeId);
-            if (!hasR1) {
-              targetGroup.records.push(r1);
-              targetGroup.storeIds = [...new Set([...targetGroup.storeIds, r1._storeId])];
-            }
-            if (!hasR2) {
-              targetGroup.records.push(r2);
-              targetGroup.storeIds = [...new Set([...targetGroup.storeIds, r2._storeId])];
-            }
-            const minSim = Math.min(targetGroup.confidence, similarity);
-            targetGroup.confidence = minSim;
-          } else {
-            duplicateGroups.push({
-              id: uid(),
-              key: groupKey,
-              type: 'pet',
-              matchValue: r1.pet,
-              matchLabel: `宠物名相似：${r1.pet} ≈ ${r2.pet}（相似度 ${Math.round(similarity * 100)}%）`,
-              records: [r1, r2],
-              storeIds: [r1._storeId, r2._storeId],
-              confidence: similarity
-            });
-          }
-          usedRecordKeys.add(key1);
-          usedRecordKeys.add(key2);
-        }
-      }
-    }
-  }
-
-  duplicateGroups.sort((a, b) => {
-    if (a.type !== b.type) return a.type === 'phone' ? -1 : 1;
-    if (b.confidence !== a.confidence) return b.confidence - a.confidence;
-    return b.records.length - a.records.length;
-  });
-
-  return { groups: duplicateGroups, allRecords };
-}
-
-function markAsCrossStoreCustomer(recordIdsWithStore, currentStoreId) {
-  const links = loadCrossStoreLinks();
-  const linkId = uid();
-  const now = new Date().toISOString();
-
-  links[linkId] = {
-    id: linkId,
-    records: recordIdsWithStore.map(({ storeId, recordId }) => ({ storeId, recordId })),
-    createdAt: now,
-    createdBy: '操作员'
-  };
-
-  persistCrossStoreLinks(links);
-  addCrossStoreAuditLog('mark_cross_store', {
-    linkId,
-    records: recordIdsWithStore,
-    fromStore: currentStoreId
-  });
-
-  return linkId;
-}
-
-function ignoreDuplicateGroup(groupKey, reason = '') {
-  const ignored = loadCrossStoreIgnored();
-  ignored.push({
-    groupKey,
-    reason,
-    at: new Date().toISOString(),
-    by: '操作员'
-  });
-  persistCrossStoreIgnored(ignored);
-  addCrossStoreAuditLog('ignore_duplicate', { groupKey, reason });
-}
-
-function copyRecordToStore(sourceStoreId, sourceRecordId, targetStoreId) {
-  const sourceData = loadStoreData(sourceStoreId);
-  if (!sourceData || !sourceData.records) return null;
-
-  const sourceRecord = sourceData.records.find(r => r.id === sourceRecordId);
-  if (!sourceRecord) return null;
-
-  const targetData = loadStoreData(targetStoreId) || createDefaultStoreData();
-  const newStatus = getDefaultStatusForVaccine(sourceRecord.vaccine, targetData.rules || defaultRules);
-  const copiedRecord = {
-    ...sourceRecord,
-    id: uid(),
-    status: newStatus,
-    timeline: [
-      ...(sourceRecord.timeline || []),
-      { status: newStatus, at: today, by: `从${sourceStoreId}复制`, note: `跨门店复制，原记录ID: ${sourceRecordId}` }
-    ],
-    notes: [
-      ...(sourceRecord.notes || []),
-      { id: uid(), content: `从门店复制，原门店ID: ${sourceStoreId}, 原记录ID: ${sourceRecordId}`, at: today, by: '系统' }
-    ],
-    schemaVersion: SCHEMA_VERSION,
-    _crossStoreSource: {
-      storeId: sourceStoreId,
-      recordId: sourceRecordId,
-      copiedAt: new Date().toISOString()
-    }
-  };
-
-  targetData.records = [copiedRecord, ...(targetData.records || [])];
-  persistStoreData(targetStoreId, targetData);
-
-  addCrossStoreAuditLog('copy_record', {
-    sourceStoreId,
-    sourceRecordId,
-    targetStoreId,
-    newRecordId: copiedRecord.id
-  });
-
-  return copiedRecord;
-}
 
 function getStoreMetaStorageKey() {
   return STORES_META_KEY;
@@ -743,9 +432,8 @@ function createDefaultStoreData() {
     records: withIds(appConfig.seed),
     templates: [...defaultTemplates],
     rules: defaultRules.map(r => ({ ...r, overdueLevels: (r.overdueLevels || []).map(ol => ({ ...ol })) })),
-    filters: { query: '', status: '全部', species: '全部', vaccine: '全部' },
+    filters: { query: '', status: '全部' },
     groupMode: 'auto',
-    ownerInfo: {},
     schemaVersion: STORE_SCHEMA_VERSION
   };
 }
@@ -795,9 +483,8 @@ function migrateFromSingleStore() {
     records,
     templates,
     rules,
-    filters: { query: '', status: '全部', species: '全部', vaccine: '全部' },
+    filters: { query: '', status: '全部' },
     groupMode: 'auto',
-    ownerInfo: {},
     schemaVersion: STORE_SCHEMA_VERSION
   };
 
@@ -879,9 +566,8 @@ function createStore(name, templateStoreId) {
         records: storeData.records.map(r => ({ ...r, id: uid(), timeline: [...(r.timeline || [])], notes: [...(r.notes || [])] })),
         templates: (storeData.templates || []).map(t => ({ ...t })),
         rules: (storeData.rules || []).map(r => ({ ...r, overdueLevels: (r.overdueLevels || []).map(ol => ({ ...ol })) })),
-        filters: { query: '', status: '全部', species: '全部', vaccine: '全部' },
-        groupMode: storeData.groupMode || 'auto',
-        ownerInfo: storeData.ownerInfo || {}
+        filters: { query: '', status: '全部' },
+        groupMode: storeData.groupMode || 'auto'
       };
     } else {
       storeData = createDefaultStoreData();
@@ -978,50 +664,35 @@ function validateImportStoreData(rawData) {
 
   if (!rawData || typeof rawData !== 'object') {
     errors.push('文件格式错误：不是有效的JSON对象');
-    return { valid: false, errors, warnings, data: null, modules: null };
+    return { valid: false, errors, warnings, data: null };
   }
 
   let storeData = null;
-  let sourceData = null;
-  let isLegacyFormat = false;
 
   if (rawData.data && typeof rawData.data === 'object') {
     storeData = rawData.data;
-    sourceData = rawData.data;
   } else if (rawData.records !== undefined || rawData.templates !== undefined) {
     storeData = rawData;
-    sourceData = rawData;
   } else if (rawData.appId && rawData.records !== undefined) {
     storeData = {
       records: rawData.records,
       templates: [...defaultTemplates],
       rules: defaultRules.map(r => ({ ...r })),
-      filters: { query: '', status: '全部', species: '全部', vaccine: '全部' },
+      filters: { query: '', status: '全部' },
       groupMode: 'auto'
     };
-    sourceData = rawData;
-    isLegacyFormat = true;
     warnings.push('检测到旧版数据格式，已自动转换为门店数据');
   }
 
   if (!storeData) {
     errors.push('未找到有效的门店数据');
-    return { valid: false, errors, warnings, data: null, modules: null };
+    return { valid: false, errors, warnings, data: null };
   }
 
   if (!Array.isArray(storeData.records)) {
     errors.push('数据格式错误：records字段应为数组');
-    return { valid: false, errors, warnings, data: null, modules: null };
+    return { valid: false, errors, warnings, data: null };
   }
-
-  const modules = {
-    records: true,
-    templates: !isLegacyFormat && sourceData && Array.isArray(sourceData.templates) && sourceData.templates.length > 0,
-    rules: !isLegacyFormat && sourceData && Array.isArray(sourceData.rules) && sourceData.rules.length > 0,
-    filters: !isLegacyFormat && sourceData && sourceData.filters !== undefined && sourceData.filters !== null,
-    groupMode: !isLegacyFormat && sourceData && sourceData.groupMode !== undefined && sourceData.groupMode !== null,
-    isLegacyFormat: isLegacyFormat
-  };
 
   const normalizedRecords = storeData.records.map(r => {
     const { record: migrated } = migrateRecord(r || {});
@@ -1032,13 +703,12 @@ function validateImportStoreData(rawData) {
     records: normalizedRecords,
     templates: Array.isArray(storeData.templates) ? storeData.templates : [...defaultTemplates],
     rules: Array.isArray(storeData.rules) ? storeData.rules : defaultRules.map(r => ({ ...r })),
-    filters: storeData.filters || { query: '', status: '全部', species: '全部', vaccine: '全部' },
+    filters: storeData.filters || { query: '', status: '全部' },
     groupMode: storeData.groupMode || 'auto',
-    ownerInfo: storeData.ownerInfo || {},
     schemaVersion: STORE_SCHEMA_VERSION
   };
 
-  return { valid: true, errors, warnings, data: result, modules };
+  return { valid: true, errors, warnings, data: result };
 }
 
 function importStoreData(storeId, importData) {
@@ -1149,29 +819,19 @@ function statusClass(status) {
   return ['status-a', 'status-b', 'status-c', 'status-d'][index] || 'status-a';
 }
 
-function normalizeFilters(filters) {
-  return {
-    query: filters?.query ?? '',
-    status: filters?.status ?? '全部',
-    species: filters?.species ?? '全部',
-    vaccine: filters?.vaccine ?? '全部'
-  };
-}
-
 function App() {
   const initialStoreState = useMemo(() => initStores(), []);
   const [stores, setStores] = useState(initialStoreState.meta.stores);
   const [currentStoreId, setCurrentStoreId] = useState(initialStoreState.storeId);
   const [records, setRecords] = useState(initialStoreState.storeData.records);
   const [form, setForm] = useState(appConfig.defaultValues);
-  const [filters, setFilters] = useState(normalizeFilters(initialStoreState.storeData.filters));
+  const [filters, setFilters] = useState(initialStoreState.storeData.filters);
   const [selected, setSelected] = useState(null);
   const [newNoteContent, setNewNoteContent] = useState('');
   const [newNoteOperator, setNewNoteOperator] = useState('');
   const [showImportModal, setShowImportModal] = useState(false);
   const [importPreview, setImportPreview] = useState(null);
   const [importFile, setImportFile] = useState(null);
-  const [rawCSVData, setRawCSVData] = useState(null);
   const fileInputRef = useRef(null);
   const [showBackupRestoreModal, setShowBackupRestoreModal] = useState(false);
   const [backupRestoreStep, setBackupRestoreStep] = useState('main');
@@ -1179,18 +839,9 @@ function App() {
   const [restoreFile, setRestoreFile] = useState(null);
   const [restoreError, setRestoreError] = useState(null);
   const restoreFileInputRef = useRef(null);
-  const [restoreRecords, setRestoreRecords] = useState(true);
-  const [restoreTemplates, setRestoreTemplates] = useState(false);
-  const [restoreRules, setRestoreRules] = useState(false);
-  const [restoreFilters, setRestoreFilters] = useState(false);
-  const [restoreGroupMode, setRestoreGroupMode] = useState(false);
   const [currentView, setCurrentView] = useState('records');
   const [ownerSearch, setOwnerSearch] = useState('');
   const [selectedOwner, setSelectedOwner] = useState(null);
-  const [ownerInfo, setOwnerInfo] = useState(initialStoreState.storeData.ownerInfo || {});
-  const [editingOwnerInfo, setEditingOwnerInfo] = useState(false);
-  const [ownerNoteDraft, setOwnerNoteDraft] = useState('');
-  const [ownerPreferredTimeDraft, setOwnerPreferredTimeDraft] = useState('');
   const [templates, setTemplates] = useState(initialStoreState.storeData.templates);
   const [editingTemplate, setEditingTemplate] = useState(null);
   const [templateForm, setTemplateForm] = useState({ species: '', vaccine: '', days: '' });
@@ -1209,8 +860,6 @@ function App() {
   });
   const [groupMode, setGroupMode] = useState(initialStoreState.storeData.groupMode);
   const [nextDateManual, setNextDateManual] = useState(false);
-  const [recalcNotice, setRecalcNotice] = useState(null);
-  const recalcTimerRef = useRef(null);
   const [calendarDate, setCalendarDate] = useState(new Date());
   const [selectedCalendarDay, setSelectedCalendarDay] = useState(null);
   const [showStoreModal, setShowStoreModal] = useState(false);
@@ -1223,25 +872,6 @@ function App() {
   const [storeImportFile, setStoreImportFile] = useState(null);
   const storeImportFileRef = useRef(null);
   const [storeImportTargetId, setStoreImportTargetId] = useState('');
-  const [importRestoreRecords, setImportRestoreRecords] = useState(true);
-  const [importRestoreTemplates, setImportRestoreTemplates] = useState(false);
-  const [importRestoreRules, setImportRestoreRules] = useState(false);
-  const [importRestoreFilters, setImportRestoreFilters] = useState(false);
-  const [importRestoreGroupMode, setImportRestoreGroupMode] = useState(false);
-  const [selectedContactIds, setSelectedContactIds] = useState(new Set());
-  const [showBatchContactModal, setShowBatchContactModal] = useState(false);
-  const [batchContactOperator, setBatchContactOperator] = useState('');
-  const [draggingRecordId, setDraggingRecordId] = useState(null);
-  const [dragOverDate, setDragOverDate] = useState(null);
-  const justDraggedRef = useRef(false);
-  const [crossStoreDuplicates, setCrossStoreDuplicates] = useState({ groups: [], allRecords: [] });
-  const [crossStoreLinks, setCrossStoreLinks] = useState(() => loadCrossStoreLinks());
-  const [crossStoreAudit, setCrossStoreAudit] = useState(() => loadCrossStoreAudit());
-  const [selectedDuplicateGroup, setSelectedDuplicateGroup] = useState(null);
-  const [crossStoreTab, setCrossStoreTab] = useState('duplicates');
-  const [copySelectedIds, setCopySelectedIds] = useState(new Set());
-  const [linkSelectedIds, setLinkSelectedIds] = useState(new Set());
-  const [isScanningDuplicates, setIsScanningDuplicates] = useState(false);
 
   const currentStore = useMemo(() => {
     return stores.find(s => s.id === currentStoreId) || stores[0] || null;
@@ -1256,7 +886,6 @@ function App() {
       rules,
       filters,
       groupMode,
-      ownerInfo,
       ...updates
     };
     persistStoreData(currentStoreId, newData);
@@ -1288,17 +917,6 @@ function App() {
     persistStoreData(currentStoreId, { ...currentData, groupMode: next });
   }
 
-  function saveOwnerInfo(next) {
-    setOwnerInfo(next);
-    const currentData = loadStoreData(currentStoreId) || createDefaultStoreData();
-    persistStoreData(currentStoreId, { ...currentData, ownerInfo: next });
-  }
-
-  function handleUpdateOwnerInfo(phone, info) {
-    const next = { ...ownerInfo, [phone]: { ...(ownerInfo[phone] || {}), ...info } };
-    saveOwnerInfo(next);
-  }
-
   function handleSwitchStore(storeId) {
     if (storeId === currentStoreId) return;
 
@@ -1310,9 +928,8 @@ function App() {
       setRecords(result.storeData.records || []);
       setTemplates(result.storeData.templates || [...defaultTemplates]);
       setRules(result.storeData.rules || defaultRules.map(r => ({ ...r })));
-      setFilters(normalizeFilters(result.storeData.filters));
+      setFilters(result.storeData.filters || { query: '', status: '全部' });
       setGroupMode(result.storeData.groupMode || 'auto');
-      setOwnerInfo(result.storeData.ownerInfo || {});
       setSelected(null);
       setSelectedOwner(null);
       setSelectedCalendarDay(null);
@@ -1335,9 +952,8 @@ function App() {
       setRecords(result.storeData.records || []);
       setTemplates(result.storeData.templates || [...defaultTemplates]);
       setRules(result.storeData.rules || defaultRules.map(r => ({ ...r })));
-      setFilters(normalizeFilters(result.storeData.filters));
+      setFilters(result.storeData.filters || { query: '', status: '全部' });
       setGroupMode(result.storeData.groupMode || 'auto');
-      setOwnerInfo(result.storeData.ownerInfo || {});
       setSelected(null);
       setSelectedOwner(null);
       setNewStoreName('');
@@ -1386,102 +1002,13 @@ function App() {
           setRecords(newStoreData.records || []);
           setTemplates(newStoreData.templates || [...defaultTemplates]);
           setRules(newStoreData.rules || defaultRules.map(r => ({ ...r })));
-          setFilters(normalizeFilters(newStoreData.filters));
+          setFilters(newStoreData.filters || { query: '', status: '全部' });
           setGroupMode(newStoreData.groupMode || 'auto');
-          setOwnerInfo(newStoreData.ownerInfo || {});
           setSelected(null);
           setSelectedOwner(null);
         }
       }
     }
-  }
-
-  function handleScanCrossStoreDuplicates() {
-    setIsScanningDuplicates(true);
-    setTimeout(() => {
-      const result = scanAllStoresForDuplicates(currentStoreId);
-      setCrossStoreDuplicates(result);
-      setIsScanningDuplicates(false);
-    }, 100);
-  }
-
-  function handleIgnoreDuplicateGroup(groupKey) {
-    if (!confirm('确定要忽略此重复分组吗？后续扫描将不再提示。')) return;
-    ignoreDuplicateGroup(groupKey);
-    handleScanCrossStoreDuplicates();
-    setCrossStoreAudit(loadCrossStoreAudit());
-    setSelectedDuplicateGroup(null);
-  }
-
-  function handleMarkAsCrossStore(group) {
-    if (linkSelectedIds.size < 2) {
-      alert('请至少选择两条记录进行关联');
-      return;
-    }
-    const recordsToLink = group.records.filter(r =>
-      linkSelectedIds.has(`${r._storeId}:${r.id}`)
-    ).map(r => ({ storeId: r._storeId, recordId: r.id }));
-
-    markAsCrossStoreCustomer(recordsToLink, currentStoreId);
-    setCrossStoreLinks(loadCrossStoreLinks());
-    setCrossStoreAudit(loadCrossStoreAudit());
-    setLinkSelectedIds(new Set());
-    alert('已成功标记为跨店客户');
-  }
-
-  function handleCopyRecordsToCurrentStore(group) {
-    if (copySelectedIds.size === 0) {
-      alert('请先选择要复制的记录');
-      return;
-    }
-    const recordsToCopy = group.records.filter(r =>
-      copySelectedIds.has(`${r._storeId}:${r.id}`) && r._storeId !== currentStoreId
-    );
-
-    if (recordsToCopy.length === 0) {
-      alert('请选择其他门店的记录进行复制');
-      return;
-    }
-
-    if (!confirm(`确定要将 ${recordsToCopy.length} 条记录复制到当前门店"${currentStore?.name}"吗？原门店数据将保留。`)) return;
-
-    let copiedCount = 0;
-    recordsToCopy.forEach(r => {
-      const copied = copyRecordToStore(r._storeId, r.id, currentStoreId);
-      if (copied) copiedCount++;
-    });
-
-    if (copiedCount > 0) {
-      const currentData = loadStoreData(currentStoreId);
-      if (currentData) {
-        setRecords(currentData.records || []);
-      }
-      setCrossStoreAudit(loadCrossStoreAudit());
-      setCopySelectedIds(new Set());
-      alert(`成功复制 ${copiedCount} 条记录到当前门店`);
-    }
-  }
-
-  function toggleCopySelection(storeId, recordId) {
-    const key = `${storeId}:${recordId}`;
-    const next = new Set(copySelectedIds);
-    if (next.has(key)) {
-      next.delete(key);
-    } else {
-      next.add(key);
-    }
-    setCopySelectedIds(next);
-  }
-
-  function toggleLinkSelection(storeId, recordId) {
-    const key = `${storeId}:${recordId}`;
-    const next = new Set(linkSelectedIds);
-    if (next.has(key)) {
-      next.delete(key);
-    } else {
-      next.add(key);
-    }
-    setLinkSelectedIds(next);
   }
 
   function handleExportStore(storeId, storeName) {
@@ -1520,16 +1047,8 @@ function App() {
           recordCount: validation.data?.records?.length || 0,
           templateCount: validation.data?.templates?.length || 0,
           ruleCount: validation.data?.rules?.length || 0,
-          modules: validation.modules,
           rawData: data
         });
-        if (validation.valid && validation.modules) {
-          setImportRestoreRecords(true);
-          setImportRestoreTemplates(validation.modules.templates);
-          setImportRestoreRules(validation.modules.rules);
-          setImportRestoreFilters(validation.modules.filters);
-          setImportRestoreGroupMode(validation.modules.groupMode);
-        }
       } catch (error) {
         setStoreImportPreview({
           fileName: file.name,
@@ -1539,14 +1058,8 @@ function App() {
           recordCount: 0,
           templateCount: 0,
           ruleCount: 0,
-          modules: null,
           rawData: null
         });
-        setImportRestoreRecords(true);
-        setImportRestoreTemplates(false);
-        setImportRestoreRules(false);
-        setImportRestoreFilters(false);
-        setImportRestoreGroupMode(false);
       }
     };
     reader.readAsText(file, 'UTF-8');
@@ -1554,61 +1067,18 @@ function App() {
 
   function handleConfirmStoreImport() {
     if (!storeImportPreview || !storeImportPreview.valid || !storeImportTargetId) return;
-    if (!importRestoreRecords && !importRestoreTemplates && !importRestoreRules && !importRestoreFilters && !importRestoreGroupMode) {
-      alert('请至少选择一个要恢复的模块');
-      return;
-    }
 
-    const { valid, data, modules } = validateImportStoreData(storeImportPreview.rawData);
+    const { valid, data } = validateImportStoreData(storeImportPreview.rawData);
     if (!valid || !data) return;
 
-    const isLegacy = modules?.isLegacyFormat;
-
-    const existingData = loadStoreData(storeImportTargetId) || createDefaultStoreData();
-
-    const mergedData = {
-      ...existingData,
-      schemaVersion: STORE_SCHEMA_VERSION
-    };
-
-    if (importRestoreRecords) {
-      mergedData.records = data.records || [];
-    }
-    if (!isLegacy) {
-      if (importRestoreTemplates) {
-        mergedData.templates = data.templates || [...defaultTemplates];
-      }
-      if (importRestoreRules) {
-        mergedData.rules = data.rules || defaultRules.map(r => ({ ...r }));
-      }
-      if (importRestoreFilters) {
-        mergedData.filters = data.filters || { query: '', status: '全部', species: '全部', vaccine: '全部' };
-      }
-      if (importRestoreGroupMode) {
-        mergedData.groupMode = data.groupMode || 'auto';
-      }
-    }
-
-    persistStoreData(storeImportTargetId, mergedData);
+    persistStoreData(storeImportTargetId, data);
 
     if (storeImportTargetId === currentStoreId) {
-      if (importRestoreRecords) {
-        setRecords(mergedData.records || []);
-      }
-      if (!isLegacy) {
-        if (importRestoreTemplates) {
-          setTemplates(mergedData.templates || [...defaultTemplates]);
-        }
-        if (importRestoreRules) {
-          setRules(mergedData.rules || defaultRules.map(r => ({ ...r })));
-        }
-        if (importRestoreFilters) {
-          setFilters(normalizeFilters(mergedData.filters));
-        }
-        if (importRestoreGroupMode) {
-          setGroupMode(mergedData.groupMode || 'auto');
-        }
-      }
+      setRecords(data.records || []);
+      setTemplates(data.templates || [...defaultTemplates]);
+      setRules(data.rules || defaultRules.map(r => ({ ...r })));
+      setFilters(data.filters || { query: '', status: '全部' });
+      setGroupMode(data.groupMode || 'auto');
       setSelected(null);
       setSelectedOwner(null);
     }
@@ -1617,11 +1087,6 @@ function App() {
     setStoreImportPreview(null);
     setStoreImportFile(null);
     setStoreImportTargetId('');
-    setImportRestoreRecords(true);
-    setImportRestoreTemplates(false);
-    setImportRestoreRules(false);
-    setImportRestoreFilters(false);
-    setImportRestoreGroupMode(false);
     if (storeImportFileRef.current) {
       storeImportFileRef.current.value = '';
     }
@@ -1632,11 +1097,6 @@ function App() {
     setStoreImportPreview(null);
     setStoreImportFile(null);
     setStoreImportTargetId('');
-    setImportRestoreRecords(true);
-    setImportRestoreTemplates(false);
-    setImportRestoreRules(false);
-    setImportRestoreFilters(false);
-    setImportRestoreGroupMode(false);
     if (storeImportFileRef.current) {
       storeImportFileRef.current.value = '';
     }
@@ -1683,6 +1143,11 @@ function App() {
   function cancelEditTemplate() {
     setEditingTemplate(null);
     setTemplateForm({ species: '', vaccine: '', days: '' });
+  }
+
+  function saveRules(next) {
+    setRules(next);
+    persistRules(next);
   }
 
   function addRule(e) {
@@ -1793,48 +1258,6 @@ function App() {
     alert(`已修复 ${count} 条记录的下次提醒日期`);
   }
 
-  function handleRecalcByTemplate() {
-    if (recalcTimerRef.current) {
-      clearTimeout(recalcTimerRef.current);
-      recalcTimerRef.current = null;
-    }
-
-    if (!form.lastDate) {
-      setRecalcNotice({ type: 'warning', message: '请先选择上次接种日期' });
-      recalcTimerRef.current = setTimeout(() => setRecalcNotice(null), 3000);
-      return;
-    }
-    if (!form.species) {
-      setRecalcNotice({ type: 'warning', message: '请先选择物种' });
-      recalcTimerRef.current = setTimeout(() => setRecalcNotice(null), 3000);
-      return;
-    }
-    if (!form.vaccine) {
-      setRecalcNotice({ type: 'warning', message: '请先选择疫苗类型' });
-      recalcTimerRef.current = setTimeout(() => setRecalcNotice(null), 3000);
-      return;
-    }
-
-    const matched = templates.find(t => t.species === form.species && t.vaccine === form.vaccine);
-    const autoNext = calcNextDate(form.lastDate, form.species, form.vaccine, templates);
-
-    if (matched && autoNext) {
-      setForm({ ...form, nextDate: autoNext });
-      setNextDateManual(false);
-      setRecalcNotice({
-        type: 'success',
-        message: `已按模板重新计算：${form.species} + ${form.vaccine}（${matched.days}天）→ ${autoNext}`
-      });
-    } else {
-      setRecalcNotice({
-        type: 'warning',
-        message: `未找到匹配模板（物种：${form.species}，疫苗：${form.vaccine}），请在"复种周期模板"页面添加配置，或手动填写下次提醒日期`
-      });
-    }
-
-    recalcTimerRef.current = setTimeout(() => setRecalcNotice(null), 5000);
-  }
-
   function addRecord(event) {
     event.preventDefault();
     const formData = new FormData(event.currentTarget);
@@ -1910,64 +1333,6 @@ function App() {
     } : item);
     persist(next);
     if (selected?.id === id) setSelected(next.find((item) => item.id === id));
-  }
-
-  function rescheduleRecord(id, newDate) {
-    const target = records.find((item) => item.id === id);
-    if (!target || target.nextDate === newDate) return;
-    const next = records.map((item) => item.id === id ? {
-      ...item,
-      nextDate: newDate,
-      timeline: [...(item.timeline || []), { status: item.status, at: today, by: '改期', note: `改期至 ${newDate}` }]
-    } : item);
-    persist(next);
-    if (selected?.id === id) setSelected(next.find((item) => item.id === id));
-    setSelectedContactIds((prev) => {
-      if (!prev.has(id)) return prev;
-      const nextSet = new Set(prev);
-      nextSet.delete(id);
-      return nextSet;
-    });
-  }
-
-  function batchUpdateStatus(ids, status, operator = '批量操作') {
-    if (ids.size === 0) return;
-    const batchTimelineEntry = { status, at: today, by: operator.trim() || '批量操作' };
-    const next = records.map((item) => ids.has(item.id) ? {
-      ...item,
-      status,
-      timeline: [...(item.timeline || []), batchTimelineEntry]
-    } : item);
-    persist(next);
-    if (selected && ids.has(selected.id)) {
-      setSelected(next.find((item) => item.id === selected.id));
-    }
-    setSelectedContactIds(new Set());
-  }
-
-  function toggleContactSelection(id) {
-    const next = new Set(selectedContactIds);
-    if (next.has(id)) {
-      next.delete(id);
-    } else {
-      next.add(id);
-    }
-    setSelectedContactIds(next);
-  }
-
-  function toggleGroupSelection(items) {
-    const allSelected = items.every(item => selectedContactIds.has(item.id));
-    const next = new Set(selectedContactIds);
-    if (allSelected) {
-      items.forEach(item => next.delete(item.id));
-    } else {
-      items.forEach(item => next.add(item.id));
-    }
-    setSelectedContactIds(next);
-  }
-
-  function clearContactSelection() {
-    setSelectedContactIds(new Set());
   }
 
   function removeRecord(id) {
@@ -2176,59 +1541,6 @@ function App() {
     return { fileDuplicates, existingDuplicates: [...new Set(existingDuplicates)] };
   }
 
-  const requiredFields = ['pet', 'ownerPhone', 'vaccine', 'nextDate'];
-
-  function buildImportPreview(fileName, headers, rows, fieldMapping) {
-    const missingRequiredFields = requiredFields.filter(field => fieldMapping[field] === undefined);
-    const missingRequiredFieldLabels = missingRequiredFields.map(
-      field => appConfig.fields.find(f => f.key === field)?.label || field
-    );
-    const validatedRows = rows.map((row, index) => ({
-      rowIndex: index + 2,
-      ...validateRow(row, fieldMapping, headers, index + 2, missingRequiredFields),
-      rawRow: row
-    }));
-    const validRows = validatedRows.filter(r => r.valid);
-    const errorRows = validatedRows.filter(r => !r.valid && !r.skipped);
-    const { fileDuplicates, existingDuplicates } = findDuplicates(validRows, records);
-    const detectedFields = appConfig.fields.map(field => ({
-      ...field,
-      detected: fieldMapping[field.key] !== undefined,
-      sourceColumn: fieldMapping[field.key] !== undefined ? headers[fieldMapping[field.key]] : null,
-      required: requiredFields.includes(field.key)
-    }));
-    return {
-      fileName,
-      totalRows: rows.length,
-      headers,
-      fieldMapping,
-      detectedFields,
-      validRows,
-      errorRows,
-      fileDuplicates,
-      existingDuplicates,
-      missingRequiredFields: missingRequiredFieldLabels,
-      allWarnings: validRows.flatMap(r => r.warnings.map(w => `第${r.rowIndex}行：${w}`))
-    };
-  }
-
-  function handleFieldMappingChange(fieldKey, columnIndex) {
-    if (!importPreview || !rawCSVData) return;
-    const newMapping = { ...importPreview.fieldMapping };
-    if (columnIndex === null || columnIndex === undefined || columnIndex === '') {
-      delete newMapping[fieldKey];
-    } else {
-      newMapping[fieldKey] = Number(columnIndex);
-    }
-    const preview = buildImportPreview(
-      importPreview.fileName,
-      rawCSVData.headers,
-      rawCSVData.rows,
-      newMapping
-    );
-    setImportPreview(preview);
-  }
-
   function processCSVFile(file) {
     setImportFile(file);
     const reader = new FileReader();
@@ -2236,10 +1548,39 @@ function App() {
       try {
         const text = e.target.result;
         const { headers, rows } = parseCSV(text);
-        setRawCSVData({ headers, rows });
         const fieldMapping = detectFieldMapping(headers);
-        const preview = buildImportPreview(file.name, headers, rows, fieldMapping);
-        setImportPreview(preview);
+        const requiredFields = ['pet', 'ownerPhone', 'vaccine', 'nextDate'];
+        const missingRequiredFields = requiredFields.filter(field => fieldMapping[field] === undefined);
+        const missingRequiredFieldLabels = missingRequiredFields.map(
+          field => appConfig.fields.find(f => f.key === field)?.label || field
+        );
+        const validatedRows = rows.map((row, index) => ({
+          rowIndex: index + 2,
+          ...validateRow(row, fieldMapping, headers, index + 2, missingRequiredFields),
+          rawRow: row
+        }));
+        const validRows = validatedRows.filter(r => r.valid);
+        const errorRows = validatedRows.filter(r => !r.valid && !r.skipped);
+        const { fileDuplicates, existingDuplicates } = findDuplicates(validRows, records);
+        const detectedFields = appConfig.fields.map(field => ({
+          ...field,
+          detected: fieldMapping[field.key] !== undefined,
+          sourceColumn: fieldMapping[field.key] !== undefined ? headers[fieldMapping[field.key]] : null,
+          required: requiredFields.includes(field.key)
+        }));
+        setImportPreview({
+          fileName: file.name,
+          totalRows: rows.length,
+          headers,
+          fieldMapping,
+          detectedFields,
+          validRows,
+          errorRows,
+          fileDuplicates,
+          existingDuplicates,
+          missingRequiredFields: missingRequiredFieldLabels,
+          allWarnings: validRows.flatMap(r => r.warnings.map(w => `第${r.rowIndex}行：${w}`))
+        });
       } catch (error) {
         alert('CSV文件解析失败，请检查文件格式');
         console.error(error);
@@ -2287,7 +1628,6 @@ function App() {
     setShowImportModal(false);
     setImportPreview(null);
     setImportFile(null);
-    setRawCSVData(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -2298,7 +1638,6 @@ function App() {
     setShowImportModal(false);
     setImportPreview(null);
     setImportFile(null);
-    setRawCSVData(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -2306,17 +1645,12 @@ function App() {
 
   function exportToJSON() {
     const exportData = {
-      version: BACKUP_FORMAT_VERSION,
+      version: 1,
       exportedAt: new Date().toISOString(),
       appId: appConfig.id,
       storageKey: appConfig.storage,
       recordCount: records.length,
-      records: records,
-      templates: templates,
-      rules: rules,
-      filters: filters,
-      groupMode: groupMode,
-      ownerInfo: ownerInfo
+      records: records
     };
     const jsonStr = JSON.stringify(exportData, null, 2);
     const blob = new Blob([jsonStr], { type: 'application/json' });
@@ -2353,7 +1687,7 @@ function App() {
     return `${prefix}\n\n📋 正确格式示例：\n${EXPECTED_FORMAT_SAMPLE}`;
   }
 
-  function buildValidationResult({ valid = true, errors = [], warnings = [], validRecords = [], invalidRecords = [], allWarnings = [], migratedCount = 0, totalRecords = 0, modules = null }) {
+  function buildValidationResult({ valid = true, errors = [], warnings = [], validRecords = [], invalidRecords = [], allWarnings = [], migratedCount = 0, totalRecords = 0 }) {
     return {
       valid,
       errors: [...errors],
@@ -2364,8 +1698,7 @@ function App() {
       migratedCount,
       totalRecords: totalRecords || validRecords.length + invalidRecords.length,
       validCount: validRecords.length,
-      invalidCount: invalidRecords.length,
-      modules
+      invalidCount: invalidRecords.length
     };
   }
 
@@ -2412,7 +1745,7 @@ function App() {
         if (data.appId && data.appId !== appConfig.id) {
           warnings.push(`⚠️ 备份文件来自不同应用(${data.appId})，可能存在字段不兼容`);
         }
-        if (data.version && data.version > BACKUP_FORMAT_VERSION) {
+        if (data.version && data.version > 1) {
           warnings.push(`⚠️ 备份文件版本(v${data.version})高于当前版本，部分字段可能无法识别`);
         }
       } else {
@@ -2577,21 +1910,6 @@ function App() {
 
     const hasFatalErrors = errors.some(e => !e.includes('条记录存在错误'));
 
-    const hasTemplates = Array.isArray(data?.templates) && data.templates.length > 0;
-    const hasRules = Array.isArray(data?.rules) && data.rules.length > 0;
-    const hasFilters = data?.filters !== undefined && data?.filters !== null && typeof data.filters === 'object';
-    const hasGroupMode = data?.groupMode !== undefined && data?.groupMode !== null;
-    const isLegacyFormat = !(hasTemplates || hasRules || hasFilters || hasGroupMode);
-
-    const modules = {
-      records: true,
-      templates: hasTemplates,
-      rules: hasRules,
-      filters: hasFilters,
-      groupMode: hasGroupMode,
-      isLegacyFormat: isLegacyFormat
-    };
-
     return buildValidationResult({
       valid: !hasFatalErrors,
       errors,
@@ -2600,8 +1918,7 @@ function App() {
       invalidRecords,
       allWarnings: allWarningsList,
       migratedCount,
-      totalRecords: recordsToProcess.length,
-      modules
+      totalRecords: recordsToProcess.length
     });
   }
 
@@ -2700,20 +2017,6 @@ function App() {
 
         const changes = calculateRestoreChanges(validation.validRecords);
 
-        if (validation.modules) {
-          setRestoreRecords(true);
-          setRestoreTemplates(validation.modules.templates);
-          setRestoreRules(validation.modules.rules);
-          setRestoreFilters(validation.modules.filters);
-          setRestoreGroupMode(validation.modules.groupMode);
-        } else {
-          setRestoreRecords(true);
-          setRestoreTemplates(false);
-          setRestoreRules(false);
-          setRestoreFilters(false);
-          setRestoreGroupMode(false);
-        }
-
         setRestoreFile(file);
         setRestorePreview({
           fileName: file.name,
@@ -2721,9 +2024,7 @@ function App() {
           exportedAt: data.exportedAt || null,
           version: data.version || 0,
           validation,
-          changes,
-          rawData: data,
-          modules: validation.modules
+          changes
         });
         setBackupRestoreStep('preview');
       } catch (error) {
@@ -2761,59 +2062,23 @@ function App() {
   function confirmRestore() {
     if (!restorePreview) return;
 
-    if (!restoreRecords && !restoreTemplates && !restoreRules && !restoreFilters && !restoreGroupMode) {
-      alert('请至少选择一个要恢复的模块');
-      return;
-    }
+    const { changes } = restorePreview;
+    const mergedRecords = [...records];
 
-    const { changes, rawData } = restorePreview;
-    const isLegacy = restorePreview.modules?.isLegacyFormat;
-
-    if (restoreRecords) {
-      const mergedRecords = [...records];
-
-      changes.overwriteRecords.forEach(({ newRecord }) => {
-        const idx = mergedRecords.findIndex(r => r.id === newRecord.id);
-        if (idx !== -1) {
-          mergedRecords[idx] = newRecord;
-        }
-      });
-
-      changes.addRecords.forEach(newRecord => {
-        mergedRecords.unshift(newRecord);
-      });
-
-      persist(mergedRecords);
-    }
-
-    if (!isLegacy && rawData) {
-      if (restoreTemplates && rawData.templates && Array.isArray(rawData.templates)) {
-        saveTemplates(rawData.templates.map(t => ({ ...t })));
+    changes.overwriteRecords.forEach(({ newRecord }) => {
+      const idx = mergedRecords.findIndex(r => r.id === newRecord.id);
+      if (idx !== -1) {
+        mergedRecords[idx] = newRecord;
       }
-      if (restoreRules && rawData.rules && Array.isArray(rawData.rules)) {
-        saveRules(rawData.rules.map(r => ({ ...r, overdueLevels: (r.overdueLevels || []).map(ol => ({ ...ol })) })));
-      }
-      if (restoreFilters && rawData.filters && typeof rawData.filters === 'object') {
-        saveFilters(normalizeFilters(rawData.filters));
-      }
-      if (restoreGroupMode && rawData.groupMode) {
-        saveGroupMode(rawData.groupMode);
-      }
-    }
+    });
 
-    const msgParts = [];
-    if (restoreRecords) {
-      msgParts.push(`记录：新增 ${changes.addCount} 条，覆盖 ${changes.overwriteCount} 条，跳过 ${changes.skipCount} 条`);
-    }
-    if (!isLegacy) {
-      if (restoreTemplates) msgParts.push('模板：已覆盖');
-      if (restoreRules) msgParts.push('规则：已覆盖');
-      if (restoreFilters) msgParts.push('筛选条件：已覆盖');
-      if (restoreGroupMode) msgParts.push('分组模式：已覆盖');
-    }
+    changes.addRecords.forEach(newRecord => {
+      mergedRecords.unshift(newRecord);
+    });
 
+    persist(mergedRecords);
     cancelRestore();
-    alert(`恢复完成：\n${msgParts.join('\n')}`);
+    alert(`恢复完成：\n新增 ${changes.addCount} 条\n覆盖 ${changes.overwriteCount} 条\n跳过 ${changes.skipCount} 条`);
   }
 
   function cancelRestore() {
@@ -2822,11 +2087,6 @@ function App() {
     setRestorePreview(null);
     setRestoreFile(null);
     setRestoreError(null);
-    setRestoreRecords(true);
-    setRestoreTemplates(false);
-    setRestoreRules(false);
-    setRestoreFilters(false);
-    setRestoreGroupMode(false);
     if (restoreFileInputRef.current) {
       restoreFileInputRef.current.value = '';
     }
@@ -2836,8 +2096,6 @@ function App() {
     return records
       .filter((item) => !filters.query || `${item.pet}${item.ownerPhone}`.includes(filters.query))
       .filter((item) => filters.status === '全部' || item.status === filters.status)
-      .filter((item) => filters.species === '全部' || item.species === filters.species)
-      .filter((item) => filters.vaccine === '全部' || item.vaccine === filters.vaccine)
       .sort((a, b) => {
         if (appConfig.sort === 'priority') {
           const rank = priorityRank(a.priority) - priorityRank(b.priority);
@@ -2864,9 +2122,9 @@ function App() {
   }, [records, filters, rules]);
 
   const metrics = [
-    { label: "宠物数", value: filteredRecords.length },
-    { label: "待联系", value: filteredRecords.filter((item) => item.status === '待联系').length },
-    { label: "即将到期", value: filteredRecords.filter((item) => {
+    { label: "宠物数", value: records.length },
+    { label: "待联系", value: records.filter((item) => item.status === '待联系').length },
+    { label: "即将到期", value: records.filter((item) => {
       if (!item.nextDate) return false;
       const adv = getAdvanceDays(item.vaccine, rules);
       return inNextDays(item.nextDate, adv);
@@ -2877,7 +2135,7 @@ function App() {
     const overdueByLevel = {};
     const todayList = [];
     const upcomingList = [];
-    filteredRecords.forEach(item => {
+    records.forEach(item => {
       if (isOverdue(item.nextDate)) {
         const diff = Math.abs(daysDiff(item.nextDate));
         const level = getOverdueLevel(diff, item.vaccine, rules);
@@ -2899,28 +2157,7 @@ function App() {
     todayList.sort((a, b) => parseLocalDate(a.nextDate) - parseLocalDate(b.nextDate));
     upcomingList.sort((a, b) => parseLocalDate(a.nextDate) - parseLocalDate(b.nextDate));
     return { overdueByLevel, today: todayList, upcoming: upcomingList };
-  }, [filteredRecords, rules]);
-
-  const allContactRecords = useMemo(() => {
-    const all = [];
-    Object.values(contactListGroups.overdueByLevel).forEach(items => all.push(...items));
-    all.push(...contactListGroups.today);
-    all.push(...contactListGroups.upcoming);
-    return all;
-  }, [contactListGroups]);
-
-  const pendingContactRecords = useMemo(() => {
-    return allContactRecords.filter(item => item.status === '待联系');
-  }, [allContactRecords]);
-
-  const selectedPendingCount = useMemo(() => {
-    let count = 0;
-    selectedContactIds.forEach(id => {
-      const item = allContactRecords.find(r => r.id === id);
-      if (item && item.status === '待联系') count++;
-    });
-    return count;
-  }, [selectedContactIds, allContactRecords]);
+  }, [records, rules]);
 
   const groupedByDate = useMemo(() => {
     if (groupMode === 'auto') {
@@ -2996,8 +2233,6 @@ function App() {
     return records
       .filter((item) => !filters.query || `${item.pet}${item.ownerPhone}`.includes(filters.query))
       .filter((item) => filters.status === '全部' || item.status === filters.status)
-      .filter((item) => filters.species === '全部' || item.species === filters.species)
-      .filter((item) => filters.vaccine === '全部' || item.vaccine === filters.vaccine)
       .reduce((acc, item) => {
         const date = item.nextDate;
         if (date) {
@@ -3005,7 +2240,7 @@ function App() {
         }
         return acc;
       }, {});
-  }, [records, filters, rules]);
+  }, [records, filters]);
 
   function getCalendarDays(year, month) {
     const firstDay = new Date(year, month, 1);
@@ -3049,186 +2284,13 @@ function App() {
 
   function getDayStats(date) {
     const items = calendarRecords[date] || [];
-    const pending = items.filter(i => i.status === '待联系').length;
-    const contacted = items.filter(i => i.status === '已联系').length;
-    const done = items.filter(i => i.status === '已接种').length;
-
-    const upcoming = items.filter(i => {
-      if (!i.nextDate) return false;
-      if (isOverdue(i.nextDate) || isToday(i.nextDate)) return false;
-      const adv = getAdvanceDays(i.vaccine, rules);
-      return isWithinNextDays(i.nextDate, adv);
-    }).length;
-
-    const overdueByLevel = {};
-    let highestOverdueLevel = -1;
-    items.forEach(item => {
-      if (isOverdue(item.nextDate) && item.status === '待联系') {
-        const diff = Math.abs(daysDiff(item.nextDate));
-        const level = getOverdueLevel(diff, item.vaccine, rules);
-        const key = level ? level.label : '逾期';
-        overdueByLevel[key] = (overdueByLevel[key] || 0) + 1;
-        if (level && level.level > highestOverdueLevel) {
-          highestOverdueLevel = level.level;
-        }
-      }
-    });
-
     return {
       total: items.length,
-      pending,
-      contacted,
-      done,
-      upcoming,
-      overdueByLevel,
-      highestOverdueLevel,
+      pending: items.filter(i => i.status === '待联系').length,
+      contacted: items.filter(i => i.status === '已联系').length,
+      done: items.filter(i => i.status === '已接种').length,
       items,
     };
-  }
-
-  const calendarMonthStats = useMemo(() => {
-    const stats = {
-      total: 0,
-      pending: 0,
-      done: 0,
-      upcoming: 0,
-      overdue: 0,
-      overdueByLevel: {}
-    };
-
-    Object.keys(calendarRecords).forEach(date => {
-      const d = new Date(date);
-      if (d.getFullYear() !== calendarDate.getFullYear() || d.getMonth() !== calendarDate.getMonth()) return;
-
-      const dayStats = getDayStats(date);
-      stats.total += dayStats.total;
-      stats.pending += dayStats.pending;
-      stats.done += dayStats.done;
-      stats.upcoming += dayStats.upcoming;
-      Object.entries(dayStats.overdueByLevel).forEach(([level, count]) => {
-        stats.overdue += count;
-        stats.overdueByLevel[level] = (stats.overdueByLevel[level] || 0) + count;
-      });
-    });
-
-    return stats;
-  }, [calendarRecords, calendarDate, rules]);
-
-  function getGroupForRecordWithRule(item, ruleOverride) {
-    const effectiveRule = ruleOverride && ruleOverride.vaccine === item.vaccine ? ruleOverride : getRuleForVaccine(item.vaccine, rules);
-    const autoGroup = effectiveRule ? (effectiveRule.autoGroup || 'overdue') : getAutoGroupForVaccine(item.vaccine, rules);
-    const effectiveRules = ruleOverride
-      ? rules.map(r => r.vaccine === ruleOverride.vaccine ? ruleOverride : r)
-      : rules;
-
-    let key;
-    if (autoGroup === 'vaccine') {
-      key = item.vaccine || '未分类';
-    } else if (autoGroup === 'status') {
-      key = item.status || '未知';
-    } else if (autoGroup === 'overdue') {
-      if (isOverdue(item.nextDate)) {
-        const diff = Math.abs(daysDiff(item.nextDate));
-        const level = ruleOverride && ruleOverride.vaccine === item.vaccine
-          ? (() => {
-              if (!ruleOverride.overdueLevels || ruleOverride.overdueLevels.length === 0) {
-                if (diff <= 7) return { label: '轻度逾期', level: 0 };
-                if (diff <= 30) return { label: '中度逾期', level: 1 };
-                return { label: '重度逾期', level: 2 };
-              }
-              for (let i = 0; i < ruleOverride.overdueLevels.length; i++) {
-                const ol = ruleOverride.overdueLevels[i];
-                if (diff >= ol.min && diff <= ol.max) {
-                  return { label: ol.label, level: i };
-                }
-              }
-              const last = ruleOverride.overdueLevels[ruleOverride.overdueLevels.length - 1];
-              return { label: last.label, level: ruleOverride.overdueLevels.length - 1 };
-            })()
-          : getOverdueLevel(diff, item.vaccine, effectiveRules);
-        key = level ? level.label : '逾期';
-      } else if (isToday(item.nextDate)) {
-        key = '今日到期';
-      } else {
-        const adv = ruleOverride && ruleOverride.vaccine === item.vaccine
-          ? (ruleOverride.advanceDays || 7)
-          : getAdvanceDays(item.vaccine, effectiveRules);
-        if (isWithinNextDays(item.nextDate, adv)) {
-          key = '即将到期';
-        } else {
-          key = '未到提醒期';
-        }
-      }
-    } else {
-      key = item[appConfig.dateKey] || item.date || item.enrollDate || '未排期';
-    }
-    return key;
-  }
-
-  const rulePreview = useMemo(() => {
-    if (!editingRule || !ruleForm.vaccine) return null;
-
-    const affectedVaccine = ruleForm.vaccine;
-    const affectedRecords = records.filter(item => item.vaccine === affectedVaccine);
-
-    const oldRule = rules.find(r => r.id === editingRule);
-    const newRule = { ...ruleForm, advanceDays: Number(ruleForm.advanceDays) || 7 };
-
-    const oldGroups = {};
-    const newGroups = {};
-
-    affectedRecords.forEach(item => {
-      const oldGroup = oldRule ? getGroupForRecordWithRule(item, oldRule) : getGroupForRecordWithRule(item, null);
-      const newGroup = getGroupForRecordWithRule(item, newRule);
-
-      if (!oldGroups[oldGroup]) oldGroups[oldGroup] = [];
-      oldGroups[oldGroup].push(item);
-
-      if (!newGroups[newGroup]) newGroups[newGroup] = [];
-      newGroups[newGroup].push(item);
-    });
-
-    const allGroupKeys = new Set([...Object.keys(oldGroups), ...Object.keys(newGroups)]);
-    const comparison = [];
-    allGroupKeys.forEach(key => {
-      const oldCount = (oldGroups[key] || []).length;
-      const newCount = (newGroups[key] || []).length;
-      comparison.push({
-        group: key,
-        oldCount,
-        newCount,
-        diff: newCount - oldCount,
-        sampleRecords: (newGroups[key] || []).slice(0, 5)
-      });
-    });
-
-    const changedCount = affectedRecords.filter(item => {
-      const oldGroup = oldRule ? getGroupForRecordWithRule(item, oldRule) : getGroupForRecordWithRule(item, null);
-      const newGroup = getGroupForRecordWithRule(item, newRule);
-      return oldGroup !== newGroup;
-    }).length;
-
-    return {
-      vaccine: affectedVaccine,
-      totalAffected: affectedRecords.length,
-      changedCount,
-      comparison: comparison.sort((a, b) => b.newCount - a.newCount),
-      sampleAffected: affectedRecords.slice(0, 10)
-    };
-  }, [editingRule, ruleForm, records, rules]);
-
-  function getGroupTagClass(groupName) {
-    if (!groupName) return 'group-tag-default';
-    const g = groupName;
-    if (g.includes('重度') || g.includes('危急')) return 'group-tag-danger';
-    if (g.includes('中度')) return 'group-tag-warning';
-    if (g.includes('轻度') || g.includes('逾期')) return 'group-tag-caution';
-    if (g.includes('今日到期') || g.includes('即将到期')) return 'group-tag-soon';
-    if (g.includes('未到') || g.includes('未排期')) return 'group-tag-muted';
-    if (g.includes('已接种') || g.includes('完成')) return 'group-tag-success';
-    if (g.includes('已联系')) return 'group-tag-info';
-    if (g.includes('待联系')) return 'group-tag-pending';
-    return 'group-tag-default';
   }
 
   function prevMonth() {
@@ -3259,15 +2321,12 @@ function App() {
     records.forEach((record) => {
       const phone = record.ownerPhone || '未知';
       if (!groups[phone]) {
-        const info = ownerInfo[phone] || {};
         groups[phone] = {
           ownerPhone: phone,
           pets: [],
           lastContactTime: null,
           pendingCount: 0,
-          totalCount: 0,
-          note: info.note || '',
-          preferredContactTime: info.preferredContactTime || ''
+          totalCount: 0
         };
       }
       groups[phone].pets.push(record);
@@ -3290,7 +2349,7 @@ function App() {
       if (b.lastContactTime && a.lastContactTime) return b.lastContactTime - a.lastContactTime;
       return b.totalCount - a.totalCount;
     });
-  }, [records, ownerInfo]);
+  }, [records]);
 
   const filteredOwnerProfiles = useMemo(() => {
     if (!ownerSearch.trim()) return ownerProfiles;
@@ -3305,21 +2364,6 @@ function App() {
     if (!selectedOwner) return null;
     return ownerProfiles.find((profile) => profile.ownerPhone === selectedOwner.ownerPhone) || selectedOwner;
   }, [ownerProfiles, selectedOwner]);
-
-  useEffect(() => {
-    setEditingOwnerInfo(false);
-    setOwnerNoteDraft('');
-    setOwnerPreferredTimeDraft('');
-  }, [selectedOwner]);
-
-  useEffect(() => {
-    return () => {
-      if (recalcTimerRef.current) {
-        clearTimeout(recalcTimerRef.current);
-        recalcTimerRef.current = null;
-      }
-    };
-  }, []);
 
   function jumpToRecord(recordId) {
     const record = records.find((r) => r.id === recordId);
@@ -3414,21 +2458,6 @@ function App() {
           <Zap size={16} />
           提醒规则引擎
         </button>
-        <button
-          className={`view-tab ${currentView === 'crossStore' ? 'active' : ''}`}
-          onClick={() => {
-            setCurrentView('crossStore');
-            setSelected(null);
-            setSelectedOwner(null);
-            setSelectedCalendarDay(null);
-            if (crossStoreDuplicates.groups.length === 0) {
-              handleScanCrossStoreDuplicates();
-            }
-          }}
-        >
-          <GitBranch size={16} />
-          跨店客户
-        </button>
       </div>
 
       <section className="metrics">
@@ -3441,23 +2470,24 @@ function App() {
           <>
             <article className="metric">
               <span>本月提醒</span>
-              <strong>{calendarMonthStats.total}</strong>
+              <strong>{Object.entries(calendarRecords).filter(([date]) => {
+                const d = new Date(date);
+                return d.getFullYear() === calendarDate.getFullYear() && d.getMonth() === calendarDate.getMonth();
+              }).reduce((sum, [, items]) => sum + items.length, 0)}</strong>
             </article>
             <article className="metric">
               <span>本月待联系</span>
-              <strong>{calendarMonthStats.pending}</strong>
+              <strong>{Object.entries(calendarRecords).filter(([date]) => {
+                const d = new Date(date);
+                return d.getFullYear() === calendarDate.getFullYear() && d.getMonth() === calendarDate.getMonth();
+              }).reduce((sum, [, items]) => sum + items.filter(i => i.status === '待联系').length, 0)}</strong>
             </article>
             <article className="metric">
               <span>本月已接种</span>
-              <strong>{calendarMonthStats.done}</strong>
-            </article>
-            <article className="metric">
-              <span>本月即将到期</span>
-              <strong>{calendarMonthStats.upcoming}</strong>
-            </article>
-            <article className="metric">
-              <span>本月逾期</span>
-              <strong>{calendarMonthStats.overdue}</strong>
+              <strong>{Object.entries(calendarRecords).filter(([date]) => {
+                const d = new Date(date);
+                return d.getFullYear() === calendarDate.getFullYear() && d.getMonth() === calendarDate.getMonth();
+              }).reduce((sum, [, items]) => sum + items.filter(i => i.status === '已接种').length, 0)}</strong>
             </article>
           </>
         ) : currentView === 'rules' ? (
@@ -3473,25 +2503,6 @@ function App() {
             <article className="metric">
               <span>逾期分级总数</span>
               <strong>{rules.reduce((sum, r) => sum + (r.overdueLevels || []).length, 0)}</strong>
-            </article>
-          </>
-        ) : currentView === 'crossStore' ? (
-          <>
-            <article className="metric">
-              <span>疑似重复分组</span>
-              <strong>{crossStoreDuplicates.groups.length}</strong>
-            </article>
-            <article className="metric">
-              <span>涉及记录数</span>
-              <strong>{crossStoreDuplicates.groups.reduce((sum, g) => sum + g.records.length, 0)}</strong>
-            </article>
-            <article className="metric">
-              <span>已标记跨店客户</span>
-              <strong>{Object.keys(crossStoreLinks).length}</strong>
-            </article>
-            <article className="metric">
-              <span>操作记录</span>
-              <strong>{crossStoreAudit.length}</strong>
             </article>
           </>
         ) : (
@@ -3518,52 +2529,12 @@ function App() {
             <PhoneCall size={18} />
             <h2>今日联系清单</h2>
           </div>
-
-          {selectedContactIds.size > 0 && (
-            <div className="batch-action-bar">
-              <div className="batch-selection-info">
-                <CheckCheck size={16} />
-                <span>已选择 <strong>{selectedContactIds.size}</strong> 条记录</span>
-                {selectedPendingCount > 0 && (
-                  <span className="batch-pending-info">（其中 <strong>{selectedPendingCount}</strong> 条待联系）</span>
-                )}
-              </div>
-              <div className="batch-actions">
-                {selectedPendingCount > 0 && (
-                  <button
-                    type="button"
-                    className="btn-primary batch-mark-btn"
-                    onClick={() => setShowBatchContactModal(true)}
-                  >
-                    <CheckCircle2 size={14} />
-                    批量标记为已联系
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  onClick={clearContactSelection}
-                >
-                  <X size={14} />
-                  取消选择
-                </button>
-              </div>
-            </div>
-          )}
-
           <div className="contact-groups">
             {Object.entries(contactListGroups.overdueByLevel).length > 0 ? (
               Object.entries(contactListGroups.overdueByLevel).map(([levelLabel, items]) => (
                 <div className={`contact-group overdue-group overdue-level-${items[0]?.overdueLevel?.level ?? 0}`} key={levelLabel}>
                   <div className="contact-group-header">
                     <div className="contact-group-title">
-                      <label className="contact-group-checkbox">
-                        <input
-                          type="checkbox"
-                          checked={items.length > 0 && items.every(item => selectedContactIds.has(item.id))}
-                          onChange={() => toggleGroupSelection(items)}
-                        />
-                      </label>
                       <AlertCircle size={16} className="contact-group-icon overdue-icon" />
                       <h3>{levelLabel}</h3>
                       <span className="contact-count">{items.length}</span>
@@ -3571,15 +2542,8 @@ function App() {
                   </div>
                   <div className="contact-records">
                     {items.map((item) => (
-                      <article className={'contact-record ' + (item.status === '已联系' ? 'contact-record-done' : '') + (selectedContactIds.has(item.id) ? ' contact-record-selected' : '')} key={item.id}>
+                      <article className={'contact-record ' + (item.status === '已联系' ? 'contact-record-done' : '')} key={item.id}>
                         <div className="contact-record-main">
-                          <label className="contact-record-checkbox" onClick={(e) => e.stopPropagation()}>
-                            <input
-                              type="checkbox"
-                              checked={selectedContactIds.has(item.id)}
-                              onChange={() => toggleContactSelection(item.id)}
-                            />
-                          </label>
                           <div className="contact-record-info">
                             <h4>{item.pet}</h4>
                             <p className="contact-meta">{item.ownerPhone}</p>
@@ -3624,15 +2588,6 @@ function App() {
             <div className="contact-group today-group">
               <div className="contact-group-header">
                 <div className="contact-group-title">
-                  {contactListGroups.today.length > 0 && (
-                    <label className="contact-group-checkbox">
-                      <input
-                        type="checkbox"
-                        checked={contactListGroups.today.length > 0 && contactListGroups.today.every(item => selectedContactIds.has(item.id))}
-                        onChange={() => toggleGroupSelection(contactListGroups.today)}
-                      />
-                    </label>
-                  )}
                   <Clock size={16} className="contact-group-icon today-icon" />
                   <h3>今日提醒</h3>
                   <span className="contact-count">{contactListGroups.today.length}</span>
@@ -3643,15 +2598,8 @@ function App() {
                   <p className="empty-group">今日暂无提醒</p>
                 ) : (
                   contactListGroups.today.map((item) => (
-                    <article className={'contact-record ' + (item.status === '已联系' ? 'contact-record-done' : '') + (selectedContactIds.has(item.id) ? ' contact-record-selected' : '')} key={item.id}>
+                    <article className={'contact-record ' + (item.status === '已联系' ? 'contact-record-done' : '')} key={item.id}>
                       <div className="contact-record-main">
-                        <label className="contact-record-checkbox" onClick={(e) => e.stopPropagation()}>
-                          <input
-                            type="checkbox"
-                            checked={selectedContactIds.has(item.id)}
-                            onChange={() => toggleContactSelection(item.id)}
-                          />
-                        </label>
                         <div className="contact-record-info">
                           <h4>{item.pet}</h4>
                           <p className="contact-meta">{item.ownerPhone}</p>
@@ -3682,15 +2630,6 @@ function App() {
             <div className="contact-group upcoming-group">
               <div className="contact-group-header">
                 <div className="contact-group-title">
-                  {contactListGroups.upcoming.length > 0 && (
-                    <label className="contact-group-checkbox">
-                      <input
-                        type="checkbox"
-                        checked={contactListGroups.upcoming.length > 0 && contactListGroups.upcoming.every(item => selectedContactIds.has(item.id))}
-                        onChange={() => toggleGroupSelection(contactListGroups.upcoming)}
-                      />
-                    </label>
-                  )}
                   <CalendarCheck size={16} className="contact-group-icon upcoming-icon" />
                   <h3>即将到期</h3>
                   <span className="contact-count">{contactListGroups.upcoming.length}</span>
@@ -3701,15 +2640,8 @@ function App() {
                   <p className="empty-group">暂无近期提醒</p>
                 ) : (
                   contactListGroups.upcoming.map((item) => (
-                    <article className={'contact-record ' + (item.status === '已联系' ? 'contact-record-done' : '') + (selectedContactIds.has(item.id) ? ' contact-record-selected' : '')} key={item.id}>
+                    <article className={'contact-record ' + (item.status === '已联系' ? 'contact-record-done' : '')} key={item.id}>
                       <div className="contact-record-main">
-                        <label className="contact-record-checkbox" onClick={(e) => e.stopPropagation()}>
-                          <input
-                            type="checkbox"
-                            checked={selectedContactIds.has(item.id)}
-                            onChange={() => toggleContactSelection(item.id)}
-                          />
-                        </label>
                         <div className="contact-record-info">
                           <h4>{item.pet}</h4>
                           <p className="contact-meta">{item.ownerPhone}</p>
@@ -3907,101 +2839,6 @@ function App() {
                       <p className="empty-text">暂无联系记录</p>
                     )}
                   </div>
-                </div>
-
-                <div className="owner-detail-section">
-                  <div className="section-title">
-                    <MessageSquareText size={16} />
-                    <h3>主人信息</h3>
-                    {!editingOwnerInfo && (
-                      <button
-                        type="button"
-                        className="edit-owner-info-btn"
-                        onClick={() => {
-                          setOwnerNoteDraft(selectedOwnerProfile.note || '');
-                          setOwnerPreferredTimeDraft(selectedOwnerProfile.preferredContactTime || '');
-                          setEditingOwnerInfo(true);
-                        }}
-                      >
-                        <Edit3 size={14} />
-                        编辑
-                      </button>
-                    )}
-                  </div>
-                  {editingOwnerInfo ? (
-                    <div className="owner-info-edit-form">
-                      <div className="form-field">
-                        <label>
-                          <span>主人备注</span>
-                          <textarea
-                            value={ownerNoteDraft}
-                            onChange={(e) => setOwnerNoteDraft(e.target.value)}
-                            placeholder="输入主人备注信息，如：客户偏好、特殊说明等..."
-                            rows={4}
-                          />
-                        </label>
-                      </div>
-                      <div className="form-field">
-                        <label>
-                          <span>首选联系时间</span>
-                          <select
-                            value={ownerPreferredTimeDraft}
-                            onChange={(e) => setOwnerPreferredTimeDraft(e.target.value)}
-                          >
-                            <option value="">请选择</option>
-                            <option value="上午 (9:00-12:00)">上午 (9:00-12:00)</option>
-                            <option value="下午 (14:00-18:00)">下午 (14:00-18:00)</option>
-                            <option value="晚上 (19:00-21:00)">晚上 (19:00-21:00)</option>
-                            <option value="工作日">工作日</option>
-                            <option value="周末">周末</option>
-                            <option value="随时">随时</option>
-                          </select>
-                        </label>
-                      </div>
-                      <div className="form-actions">
-                        <button
-                          type="button"
-                          className="primary"
-                          onClick={() => {
-                            handleUpdateOwnerInfo(selectedOwnerProfile.ownerPhone, {
-                              note: ownerNoteDraft.trim(),
-                              preferredContactTime: ownerPreferredTimeDraft
-                            });
-                            setEditingOwnerInfo(false);
-                          }}
-                        >
-                          <Save size={14} />
-                          保存
-                        </button>
-                        <button
-                          type="button"
-                          className="btn-secondary"
-                          onClick={() => {
-                            setEditingOwnerInfo(false);
-                            setOwnerNoteDraft('');
-                            setOwnerPreferredTimeDraft('');
-                          }}
-                        >
-                          取消
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="owner-info-display">
-                      <div className="owner-info-item">
-                        <span className="info-label">主人备注</span>
-                        <p className="info-value">
-                          {selectedOwnerProfile.note || <span className="empty-text">暂无备注</span>}
-                        </p>
-                      </div>
-                      <div className="owner-info-item">
-                        <span className="info-label">首选联系时间</span>
-                        <p className="info-value">
-                          {selectedOwnerProfile.preferredContactTime || <span className="empty-text">未设置</span>}
-                        </p>
-                      </div>
-                    </div>
-                  )}
                 </div>
 
                 <div className="owner-detail-section">
@@ -4223,107 +3060,6 @@ function App() {
                   恢复默认规则
                 </button>
               </div>
-
-              {rulePreview && (
-                <div className="rule-preview-panel">
-                  <div className="panel-title">
-                    <Zap size={18} />
-                    <h2>规则生效预览</h2>
-                    <span className="template-count">实时</span>
-                  </div>
-                  <div className="rule-preview-summary">
-                    <div className="preview-summary-item">
-                      <span className="preview-summary-icon">
-                        <Info size={16} />
-                      </span>
-                      <div>
-                        <p className="preview-summary-label">受影响疫苗</p>
-                        <p className="preview-summary-value">{rulePreview.vaccine}</p>
-                      </div>
-                    </div>
-                    <div className="preview-summary-item">
-                      <span className="preview-summary-icon">
-                        <Users size={16} />
-                      </span>
-                      <div>
-                        <p className="preview-summary-label">门店受影响记录</p>
-                        <p className="preview-summary-value">{rulePreview.totalAffected} 条</p>
-                      </div>
-                    </div>
-                    <div className="preview-summary-item">
-                      <span className={`preview-summary-icon ${rulePreview.changedCount > 0 ? 'icon-change' : ''}`}>
-                        <CheckCheck size={16} />
-                      </span>
-                      <div>
-                        <p className="preview-summary-label">分组将发生变化</p>
-                        <p className={`preview-summary-value ${rulePreview.changedCount > 0 ? 'value-change' : ''}`}>
-                          {rulePreview.changedCount} 条
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="rule-preview-hint">
-                    <AlertCircle size={14} />
-                    <span>以下为新规则生效后的分组分布。保存前不会修改任何真实记录。</span>
-                  </div>
-
-                  <div className="preview-comparison-table">
-                    <div className="comparison-header">
-                      <span className="comparison-col-group">提醒分组</span>
-                      <span className="comparison-col-num">原规则</span>
-                      <span className="comparison-col-num">新规则</span>
-                      <span className="comparison-col-num">变化</span>
-                    </div>
-                    {rulePreview.comparison.map((row) => (
-                      <div className="comparison-row" key={row.group}>
-                        <span className="comparison-col-group">
-                          <span className={`group-tag ${getGroupTagClass(row.group)}`}>{row.group}</span>
-                        </span>
-                        <span className="comparison-col-num">{row.oldCount}</span>
-                        <span className="comparison-col-num comparison-highlight">{row.newCount}</span>
-                        <span className={`comparison-col-num ${row.diff > 0 ? 'diff-up' : row.diff < 0 ? 'diff-down' : ''}`}>
-                          {row.diff > 0 ? `+${row.diff}` : row.diff === 0 ? '—' : row.diff}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-
-                  {rulePreview.sampleAffected.length > 0 && (
-                    <div className="preview-samples">
-                      <p className="preview-samples-title">
-                        <PawPrint size={14} /> 受影响记录示例（最多展示10条）
-                      </p>
-                      <div className="preview-samples-list">
-                        {rulePreview.sampleAffected.map((item) => {
-                          const oldRule = rules.find(r => r.id === editingRule);
-                          const newRule = { ...ruleForm, advanceDays: Number(ruleForm.advanceDays) || 7 };
-                          const oldGroup = oldRule ? getGroupForRecordWithRule(item, oldRule) : getGroupForRecordWithRule(item, null);
-                          const newGroup = getGroupForRecordWithRule(item, newRule);
-                          const hasChange = oldGroup !== newGroup;
-                          return (
-                            <div className={`preview-sample-item ${hasChange ? 'sample-changed' : ''}`} key={item.id}>
-                              <div className="sample-info">
-                                <p className="sample-pet">{item.pet}</p>
-                                <p className="sample-meta">{item.species} · {item.ownerPhone}</p>
-                              </div>
-                              <div className="sample-date">
-                                <CalendarDays size={12} />
-                                <span>{item.nextDate || '无日期'}</span>
-                              </div>
-                              <div className="sample-group-transition">
-                                <span className={`group-tag ${getGroupTagClass(oldGroup)}`}>{oldGroup}</span>
-                                <ChevronRight size={14} className="arrow-icon" />
-                                <span className={`group-tag ${getGroupTagClass(newGroup)}`}>{newGroup}</span>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
             </div>
 
             <div className="panel rules-list-panel">
@@ -4368,293 +3104,6 @@ function App() {
         </section>
       )}
 
-      {currentView === 'crossStore' && (
-        <section className="panel cross-store-panel">
-          <div className="panel-title">
-            <GitBranch size={18} />
-            <h2>跨店客户管理</h2>
-            <div className="panel-actions">
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={handleScanCrossStoreDuplicates}
-                disabled={isScanningDuplicates}
-              >
-                <RefreshCw size={14} className={isScanningDuplicates ? 'spin' : ''} />
-                {isScanningDuplicates ? '扫描中...' : '重新扫描'}
-              </button>
-            </div>
-          </div>
-
-          <div className="cross-store-tabs">
-            <button
-              className={`cross-store-tab ${crossStoreTab === 'duplicates' ? 'active' : ''}`}
-              onClick={() => setCrossStoreTab('duplicates')}
-            >
-              <AlertTriangle size={14} />
-              疑似重复客户
-            </button>
-            <button
-              className={`cross-store-tab ${crossStoreTab === 'linked' ? 'active' : ''}`}
-              onClick={() => setCrossStoreTab('linked')}
-            >
-              <Link2 size={14} />
-              已标记跨店客户
-            </button>
-            <button
-              className={`cross-store-tab ${crossStoreTab === 'audit' ? 'active' : ''}`}
-              onClick={() => setCrossStoreTab('audit')}
-            >
-              <History size={14} />
-              操作审计日志
-            </button>
-          </div>
-
-          {crossStoreTab === 'duplicates' && (
-            <div className="cross-store-content">
-              {stores.length < 2 ? (
-                <div className="empty-state">
-                  <Building2 size={48} className="empty-icon" />
-                  <p>请先创建多个门店后再使用跨店客户识别功能</p>
-                </div>
-              ) : crossStoreDuplicates.groups.length === 0 ? (
-                <div className="empty-state">
-                  <CheckCircle2 size={48} className="success-icon" />
-                  <p>{isScanningDuplicates ? '正在扫描所有门店数据...' : '未发现跨门店重复客户'}</p>
-                  {!isScanningDuplicates && (
-                    <button type="button" className="btn-primary" onClick={handleScanCrossStoreDuplicates}>
-                      <RefreshCw size={14} />
-                      立即扫描
-                    </button>
-                  )}
-                </div>
-              ) : (
-                <div className="duplicate-groups">
-                  {crossStoreDuplicates.groups.map((group) => (
-                    <article key={group.id} className={`duplicate-group ${selectedDuplicateGroup?.id === group.id ? 'expanded' : ''}`}>
-                      <div className="duplicate-group-header" onClick={() => {
-                        if (selectedDuplicateGroup?.id === group.id) {
-                          setSelectedDuplicateGroup(null);
-                          setCopySelectedIds(new Set());
-                          setLinkSelectedIds(new Set());
-                        } else {
-                          setSelectedDuplicateGroup(group);
-                          setCopySelectedIds(new Set());
-                          setLinkSelectedIds(new Set());
-                        }
-                      }}>
-                        <div className="duplicate-group-info">
-                          <div className={`duplicate-type-badge ${group.type}`}>
-                            {group.type === 'phone' ? '手机号匹配' : '宠物名相似'}
-                          </div>
-                          <span className="duplicate-match-label">{group.matchLabel}</span>
-                          <span className="duplicate-record-count">
-                            {group.records.length} 条记录 · {group.storeIds.length} 个门店
-                          </span>
-                          {group.confidence < 1 && (
-                            <span className="duplicate-confidence">
-                              置信度 {Math.round(group.confidence * 100)}%
-                            </span>
-                          )}
-                        </div>
-                        <ChevronRight size={18} className={`chevron ${selectedDuplicateGroup?.id === group.id ? 'rotated' : ''}`} />
-                      </div>
-
-                      {selectedDuplicateGroup?.id === group.id && (
-                        <div className="duplicate-group-detail">
-                          <div className="duplicate-actions-bar">
-                            <button
-                              type="button"
-                              className="btn-secondary ghost-danger"
-                              onClick={() => handleIgnoreDuplicateGroup(group.key)}
-                            >
-                              <Link2Off size={14} />
-                              忽略此分组
-                            </button>
-                            <button
-                              type="button"
-                              className="btn-secondary"
-                              onClick={() => handleMarkAsCrossStore(group)}
-                              disabled={linkSelectedIds.size < 2}
-                            >
-                              <Link2 size={14} />
-                              标记为跨店客户 {linkSelectedIds.size > 0 && `(${linkSelectedIds.size})`}
-                            </button>
-                            <button
-                              type="button"
-                              className="btn-primary"
-                              onClick={() => handleCopyRecordsToCurrentStore(group)}
-                              disabled={copySelectedIds.size === 0}
-                            >
-                              <Copy size={14} />
-                              复制到当前门店 {copySelectedIds.size > 0 && `(${copySelectedIds.size})`}
-                            </button>
-                          </div>
-
-                          <div className="duplicate-records-list">
-                            {group.records.map((record) => {
-                              const recordKey = `${record._storeId}:${record.id}`;
-                              const isCurrentStore = record._storeId === currentStoreId;
-                              return (
-                                <div key={recordKey} className={`duplicate-record-card ${isCurrentStore ? 'current-store' : ''}`}>
-                                  <div className="duplicate-record-header">
-                                    <label className="record-checkbox">
-                                      <input
-                                        type="checkbox"
-                                        checked={copySelectedIds.has(recordKey)}
-                                        onChange={() => toggleCopySelection(record._storeId, record.id)}
-                                      />
-                                      <span className="checkbox-label">复制</span>
-                                    </label>
-                                    <label className="record-checkbox">
-                                      <input
-                                        type="checkbox"
-                                        checked={linkSelectedIds.has(recordKey)}
-                                        onChange={() => toggleLinkSelection(record._storeId, record.id)}
-                                      />
-                                      <span className="checkbox-label">关联</span>
-                                    </label>
-                                    <div className="record-store-tag">
-                                      <Building2 size={12} />
-                                      {record._storeName}
-                                      {isCurrentStore && <span className="current-badge">当前门店</span>}
-                                    </div>
-                                  </div>
-                                  <div className="duplicate-record-body">
-                                    <div className="record-main-info">
-                                      <PawPrint size={16} className="record-icon" />
-                                      <strong className="record-pet-name">{record.pet}</strong>
-                                      <span className="record-species">{record.species}</span>
-                                      <span className="record-vaccine">{record.vaccine}</span>
-                                    </div>
-                                    <div className="record-sub-info">
-                                      <span><PhoneCall size={12} /> {record.ownerPhone || '无联系方式'}</span>
-                                      <span><Calendar size={12} /> 下次提醒：{record.nextDate || '未设置'}</span>
-                                      <span className={`record-status status-${appConfig.statuses.indexOf(record.status)}`}>
-                                        {record.status}
-                                      </span>
-                                    </div>
-                                    {record._crossStoreSource && (
-                                      <div className="record-source-tag">
-                                        <ShieldCheck size={12} />
-                                        从其他门店复制而来
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-
-                          <div className="duplicate-group-footer">
-                            <p className="hint-text">
-                              <Info size={12} />
-                              提示："复制"会在当前门店创建新记录，原门店数据保持不变；"标记为跨店客户"仅建立关联标识，不修改原始数据。
-                            </p>
-                          </div>
-                        </div>
-                      )}
-                    </article>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          {crossStoreTab === 'linked' && (
-            <div className="cross-store-content">
-              {Object.keys(crossStoreLinks).length === 0 ? (
-                <div className="empty-state">
-                  <Link2 size={48} className="empty-icon" />
-                  <p>暂无已标记的跨店客户</p>
-                </div>
-              ) : (
-                <div className="linked-customers-list">
-                  {Object.values(crossStoreLinks).map((link) => (
-                    <article key={link.id} className="linked-customer-card">
-                      <div className="linked-customer-header">
-                        <Link2 size={16} />
-                        <span className="linked-id">关联ID: {link.id}</span>
-                        <span className="linked-date">
-                          创建于 {new Date(link.createdAt).toLocaleString('zh-CN')}
-                        </span>
-                      </div>
-                      <div className="linked-customer-records">
-                        {link.records.map((linked, idx) => {
-                          const store = stores.find(s => s.id === linked.storeId);
-                          const storeData = loadStoreData(linked.storeId);
-                          const record = storeData?.records?.find(r => r.id === linked.recordId);
-                          return (
-                            <div key={idx} className={`linked-record-item ${linked.storeId === currentStoreId ? 'current-store' : ''}`}>
-                              <Building2 size={12} />
-                              <span className="linked-store-name">{store?.name || linked.storeId}</span>
-                              {record && (
-                                <>
-                                  <span className="linked-pet-name">{record.pet}</span>
-                                  <span className="linked-phone">{record.ownerPhone}</span>
-                                </>
-                              )}
-                              {linked.storeId === currentStoreId && (
-                                <span className="current-badge">当前门店</span>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </article>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          {crossStoreTab === 'audit' && (
-            <div className="cross-store-content">
-              {crossStoreAudit.length === 0 ? (
-                <div className="empty-state">
-                  <History size={48} className="empty-icon" />
-                  <p>暂无操作记录</p>
-                </div>
-              ) : (
-                <div className="audit-log-list">
-                  {crossStoreAudit.map((log) => (
-                    <article key={log.id} className="audit-log-item">
-                      <div className="audit-log-header">
-                        <History size={14} />
-                        <span className="audit-action">
-                          {log.action === 'ignore_duplicate' && '忽略重复分组'}
-                          {log.action === 'mark_cross_store' && '标记为跨店客户'}
-                          {log.action === 'copy_record' && '复制记录到门店'}
-                        </span>
-                        <span className="audit-time">{new Date(log.at).toLocaleString('zh-CN')}</span>
-                        <span className="audit-operator">{log.by}</span>
-                      </div>
-                      <div className="audit-log-details">
-                        {log.action === 'ignore_duplicate' && (
-                          <span>分组Key: {log.details.groupKey} {log.details.reason && `（原因: ${log.details.reason}）`}</span>
-                        )}
-                        {log.action === 'mark_cross_store' && (
-                          <span>
-                            关联ID: {log.details.linkId}，
-                            涉及记录数: {log.details.records?.length || 0}
-                          </span>
-                        )}
-                        {log.action === 'copy_record' && (
-                          <span>
-                            从 {log.details.sourceStoreId} 复制到 {log.details.targetStoreId}，
-                            新记录ID: {log.details.newRecordId}
-                          </span>
-                        )}
-                      </div>
-                    </article>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </section>
-      )}
-
       {currentView === 'calendar' && (
         <>
           <section className="panel calendar-toolbar-panel">
@@ -4682,14 +3131,6 @@ function App() {
                   <option>全部</option>
                   {appConfig.statuses.map((status) => <option key={status}>{status}</option>)}
                 </select>
-                <select value={filters.species} onChange={(event) => saveFilters({ ...filters, species: event.target.value })}>
-                  <option value="全部">全部物种</option>
-                  {appConfig.fields.find(f => f.key === 'species').options.map((o) => <option key={o}>{o}</option>)}
-                </select>
-                <select value={filters.vaccine} onChange={(event) => saveFilters({ ...filters, vaccine: event.target.value })}>
-                  <option value="全部">全部疫苗</option>
-                  {appConfig.fields.find(f => f.key === 'vaccine').options.map((o) => <option key={o}>{o}</option>)}
-                </select>
               </div>
             </div>
             <div className="calendar-legend">
@@ -4704,10 +3145,6 @@ function App() {
               <span className="legend-item">
                 <span className="legend-dot legend-done"></span>
                 已接种
-              </span>
-              <span className="legend-item">
-                <span className="legend-dot legend-upcoming"></span>
-                即将到期
               </span>
             </div>
           </section>
@@ -4725,43 +3162,11 @@ function App() {
                   const isToday = day.date === today;
                   const isSelected = day.date === selectedCalendarDay;
                   const dayIsOverdue = isOverdue(day.date) && stats.pending > 0;
-                  const hasUpcoming = stats.upcoming > 0;
-                  const highestLevel = stats.highestOverdueLevel;
-                  const overdueClass = highestLevel >= 2 ? 'overdue-severe' : highestLevel === 1 ? 'overdue-moderate' : highestLevel === 0 ? 'overdue-mild' : '';
-                  const isDragOver = dragOverDate === day.date;
                   return (
                     <div
                       key={day.date}
-                      className={`calendar-day ${!day.isCurrentMonth ? 'other-month' : ''} ${isToday ? 'is-today' : ''} ${isSelected ? 'is-selected' : ''} ${dayIsOverdue ? 'is-overdue ' + overdueClass : ''} ${hasUpcoming ? 'has-upcoming' : ''} ${stats.total > 0 ? 'has-records' : ''} ${isDragOver ? 'is-drag-over' : ''}`}
-                      onClick={() => {
-                        if (justDraggedRef.current) {
-                          justDraggedRef.current = false;
-                          return;
-                        }
-                        if (stats.total > 0) setSelectedCalendarDay(day.date);
-                      }}
-                      onDragOver={(e) => {
-                        e.preventDefault();
-                        e.dataTransfer.dropEffect = 'move';
-                      }}
-                      onDragEnter={(e) => {
-                        e.preventDefault();
-                        setDragOverDate(day.date);
-                      }}
-                      onDragLeave={(e) => {
-                        if (e.currentTarget.contains(e.relatedTarget)) return;
-                        if (dragOverDate === day.date) {
-                          setDragOverDate(null);
-                        }
-                      }}
-                      onDrop={(e) => {
-                        e.preventDefault();
-                        const recordId = e.dataTransfer.getData('text/plain');
-                        if (recordId) {
-                          rescheduleRecord(recordId, day.date);
-                        }
-                        setDragOverDate(null);
-                      }}
+                      className={`calendar-day ${!day.isCurrentMonth ? 'other-month' : ''} ${isToday ? 'is-today' : ''} ${isSelected ? 'is-selected' : ''} ${dayIsOverdue ? 'is-overdue' : ''} ${stats.total > 0 ? 'has-records' : ''}`}
+                      onClick={() => stats.total > 0 ? setSelectedCalendarDay(day.date) : null}
                     >
                       <div className="calendar-day-header">
                         <span className="calendar-day-number">{day.day}</span>
@@ -4779,9 +3184,6 @@ function App() {
                           )}
                           {stats.done > 0 && (
                             <span className="day-stat stat-done">{stats.done}</span>
-                          )}
-                          {stats.upcoming > 0 && (
-                            <span className="day-stat stat-upcoming">{stats.upcoming}</span>
                           )}
                         </div>
                       )}
@@ -4817,58 +3219,16 @@ function App() {
                     <span className="day-stat-label">已接种</span>
                     <span className="day-stat-value stat-done">{getDayStats(selectedCalendarDay).done}</span>
                   </div>
-                  {getDayStats(selectedCalendarDay).upcoming > 0 && (
-                    <div className="day-stat-item">
-                      <span className="day-stat-label">即将到期</span>
-                      <span className="day-stat-value stat-upcoming">{getDayStats(selectedCalendarDay).upcoming}</span>
-                    </div>
-                  )}
                 </div>
-                {Object.keys(getDayStats(selectedCalendarDay).overdueByLevel).length > 0 && (
-                  <div className="day-detail-overdue">
-                    <p className="overdue-title">
-                      <AlertTriangle size={14} /> 逾期分布
-                    </p>
-                    <div className="overdue-level-list">
-                      {Object.entries(getDayStats(selectedCalendarDay).overdueByLevel).map(([level, count]) => (
-                        <div key={level} className="overdue-level-item">
-                          <span className={`group-tag ${getGroupTagClass(level)}`}>{level}</span>
-                          <span className="overdue-count">{count} 条</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
                 <div className="day-records-list">
                   {getDayStats(selectedCalendarDay).items.length === 0 ? (
                     <p className="empty-group">当天暂无提醒记录</p>
                   ) : (
                     getDayStats(selectedCalendarDay).items.map((item) => (
                       <article
-                        className={'day-record ' + (item.conflict || hasOverlap(item, records) ? 'conflict' : '') + (draggingRecordId === item.id ? ' is-dragging' : '')}
+                        className={'day-record ' + (item.conflict || hasOverlap(item, records) ? 'conflict' : '')}
                         key={item.id}
-                        draggable
-                        onDragStart={(e) => {
-                          setDraggingRecordId(item.id);
-                          e.dataTransfer.setData('text/plain', item.id);
-                          e.dataTransfer.effectAllowed = 'move';
-                        }}
-                        onDragEnd={() => {
-                          setDraggingRecordId(null);
-                          setDragOverDate(null);
-                          justDraggedRef.current = true;
-                          setTimeout(() => {
-                            justDraggedRef.current = false;
-                          }, 100);
-                        }}
-                        onClick={() => {
-                          if (justDraggedRef.current) {
-                            justDraggedRef.current = false;
-                            return;
-                          }
-                          setSelected(item);
-                          setCurrentView('records');
-                        }}
+                        onClick={() => { setSelected(item); setCurrentView('records'); }}
                       >
                         <div className="day-record-head">
                           <div>
@@ -4955,27 +3315,16 @@ function App() {
                           placeholder={field.placeholder}
                         />
                       ) : field.key === 'nextDate' ? (
-                        <div className="next-date-input-group">
-                          <input
-                            type={field.type}
-                            value={form[field.key] || ''}
-                            name={field.key}
-                            onChange={(event) => {
-                              setForm({ ...form, nextDate: event.target.value });
-                              setNextDateManual(!!event.target.value && event.target.value !== autoNext);
-                            }}
-                            placeholder={field.placeholder}
-                          />
-                          <button
-                            type="button"
-                            className="recalc-btn"
-                            onClick={handleRecalcByTemplate}
-                            title="根据物种、疫苗和上次接种日期按模板重新计算下次提醒日期"
-                          >
-                            <RotateCcw size={14} />
-                            按模板重新计算
-                          </button>
-                        </div>
+                        <input
+                          type={field.type}
+                          value={form[field.key] || ''}
+                          name={field.key}
+                          onChange={(event) => {
+                            setForm({ ...form, nextDate: event.target.value });
+                            setNextDateManual(!!event.target.value && event.target.value !== autoNext);
+                          }}
+                          placeholder={field.placeholder}
+                        />
                       ) : (
                         <input
                           type={field.type}
@@ -5000,25 +3349,6 @@ function App() {
                   </select>
                 </label>
               </div>
-              {recalcNotice && (
-                <div className={`recalc-notice recalc-notice-${recalcNotice.type}`}>
-                  {recalcNotice.type === 'success' ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
-                  <span>{recalcNotice.message}</span>
-                  <button
-                    type="button"
-                    className="recalc-notice-close"
-                    onClick={() => {
-                      setRecalcNotice(null);
-                      if (recalcTimerRef.current) {
-                        clearTimeout(recalcTimerRef.current);
-                        recalcTimerRef.current = null;
-                      }
-                    }}
-                  >
-                    <X size={14} />
-                  </button>
-                </div>
-              )}
               <button className="primary" type="submit"><Plus size={18} />新增</button>
               <button type="button" className="import-btn" onClick={() => setShowImportModal(true)}><Upload size={18} />批量导入CSV</button>
               <button type="button" className="import-btn" onClick={() => { setShowBackupRestoreModal(true); setBackupRestoreStep('main'); }}><Save size={18} />数据备份与恢复</button>
@@ -5034,14 +3364,6 @@ function App() {
                 <select value={filters.status} onChange={(event) => saveFilters({ ...filters, status: event.target.value })}>
                   <option>全部</option>
                   {appConfig.statuses.map((status) => <option key={status}>{status}</option>)}
-                </select>
-                <select value={filters.species} onChange={(event) => saveFilters({ ...filters, species: event.target.value })}>
-                  <option value="全部">全部物种</option>
-                  {appConfig.fields.find(f => f.key === 'species').options.map((o) => <option key={o}>{o}</option>)}
-                </select>
-                <select value={filters.vaccine} onChange={(event) => saveFilters({ ...filters, vaccine: event.target.value })}>
-                  <option value="全部">全部疫苗</option>
-                  {appConfig.fields.find(f => f.key === 'vaccine').options.map((o) => <option key={o}>{o}</option>)}
                 </select>
               </div>
 
@@ -5280,50 +3602,37 @@ function App() {
 
                   {importPreview.missingRequiredFields && importPreview.missingRequiredFields.length > 0 && (
                     <div className="preview-section fatal-section">
-                      <h3><AlertOctagon size={16} className="fatal-icon" />缺少必填字段映射</h3>
-                      <p className="fatal-text">以下必填字段尚未映射到CSV列，无法进行导入：</p>
+                      <h3><AlertOctagon size={16} className="fatal-icon" />字段缺失</h3>
+                      <p className="fatal-text">CSV文件缺少以下必填字段列，无法进行导入：</p>
                       <div className="missing-fields-list">
                         {importPreview.missingRequiredFields.map((field) => (
                           <span key={field} className="missing-field-item">{field}</span>
                         ))}
                       </div>
-                      <p className="fatal-hint">请在下方"字段映射设置"中为这些字段选择对应的CSV列。</p>
+                      <p className="fatal-hint">请补充以上列后重新上传文件。</p>
                     </div>
                   )}
 
                   <div className="preview-section">
-                    <h3><Settings size={16} />字段映射设置</h3>
-                    <p className="mapping-hint">系统已自动识别列名，您可以手动调整CSV列与系统字段的对应关系。</p>
-                    <div className="field-mapping-editor">
+                    <h3><FileText size={16} />字段识别结果</h3>
+                    <div className="field-mapping-grid">
                       {importPreview.detectedFields.map((field) => (
-                        <div key={field.key} className={`field-mapping-row ${field.detected ? 'detected' : 'missing'}`}>
-                          <div className="field-name-col">
-                            <span className="field-label">
-                              {field.label}
-                              {field.required && <span className="required-mark">*</span>}
-                            </span>
-                          </div>
-                          <div className="field-arrow-col">
-                            <ChevronRight size={16} className="mapping-arrow" />
-                          </div>
-                          <div className="field-select-col">
-                            <select
-                              className="field-mapping-select"
-                              value={importPreview.fieldMapping[field.key] !== undefined ? importPreview.fieldMapping[field.key] : ''}
-                              onChange={(e) => handleFieldMappingChange(field.key, e.target.value)}
-                            >
-                              <option value="">-- 不映射 --</option>
-                              {importPreview.headers.map((header, index) => (
-                                <option key={index} value={index}>
-                                  {header}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
+                        <div key={field.key} className={`field-mapping-item ${field.detected ? 'detected' : 'missing'}`}>
+                          <span className="field-label">
+                            {field.label}
+                            {field.required && <span className="required-mark">*</span>}
+                          </span>
+                          <span className="field-status">
+                            {field.detected ? (
+                              <span className="detected-badge"><CheckCircle2 size={14} /> {field.sourceColumn}</span>
+                            ) : (
+                              <span className="missing-badge"><AlertTriangle size={14} /> 未识别</span>
+                            )}
+                          </span>
                         </div>
                       ))}
                     </div>
-                    <p className="field-hint"><span className="required-mark">*</span> 标记为必填字段，缺少必填字段时无法导入</p>
+                    <p className="field-hint"><span className="required-mark">*</span> 标记为必填字段</p>
                   </div>
 
                   {importPreview.fileDuplicates.length > 0 && (
@@ -5459,7 +3768,7 @@ function App() {
                       <FileText size={32} />
                     </div>
                     <h3>导出数据</h3>
-                    <p>将当前门店的完整数据导出为JSON备份文件，包含记录、模板、规则、筛选条件和分组模式等所有配置。</p>
+                    <p>将当前所有宠物疫苗提醒数据导出为JSON备份文件，包含完整的记录、时间线和备注信息。</p>
                     <div className="record-count-info">
                       共 <strong>{records.length}</strong> 条记录将被导出
                     </div>
@@ -5481,10 +3790,10 @@ function App() {
                       <Upload size={32} />
                     </div>
                     <h3>恢复数据</h3>
-                    <p>选择之前导出的JSON备份文件恢复数据。可选择需要恢复的模块，恢复前将展示预览信息，确认后才会执行。</p>
+                    <p>选择之前导出的JSON备份文件恢复数据。恢复前将展示变更统计，确认后才会执行。</p>
                     <p className="warning-text">
                       <AlertTriangle size={14} />
-                      注意：记录按ID覆盖、宠物+疫苗重复会跳过；配置类模块将整体覆盖
+                      注意：ID相同的记录将被覆盖，已存在相同宠物+疫苗的记录将被跳过
                     </p>
                     <div
                       className="drop-zone"
@@ -5560,107 +3869,6 @@ function App() {
                   </div>
                 </div>
 
-                {restorePreview.modules?.isLegacyFormat ? (
-                  <div className="restore-modules-section">
-                    <h3><Info size={16} className="info-icon" />恢复模块</h3>
-                    <div className="restore-modules-legacy">
-                      <p className="legacy-hint">⚠️ 旧版备份仅包含记录数据，将按原有逻辑恢复（新增/覆盖/跳过）</p>
-                      <label className="module-checkbox disabled">
-                        <input
-                          type="checkbox"
-                          checked={restoreRecords}
-                          disabled
-                        />
-                        <span className="module-label">
-                          <span className="module-name">客户记录</span>
-                          <span className="module-count">{restorePreview.changes.totalValid} 条有效记录</span>
-                        </span>
-                      </label>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="restore-modules-section">
-                    <h3><Info size={16} className="info-icon" />选择要恢复的模块</h3>
-                    <div className="restore-modules-list">
-                      <label className="module-checkbox">
-                        <input
-                          type="checkbox"
-                          checked={restoreRecords}
-                          onChange={(e) => setRestoreRecords(e.target.checked)}
-                        />
-                        <span className="module-label">
-                          <span className="module-name">客户记录</span>
-                          <span className="module-count">{restorePreview.changes.totalValid} 条记录（新增/覆盖/跳过）</span>
-                        </span>
-                      </label>
-                      <label className={`module-checkbox ${!restorePreview.modules?.templates ? 'disabled' : ''}`}>
-                        <input
-                          type="checkbox"
-                          checked={restorePreview.modules?.templates ? restoreTemplates : false}
-                          disabled={!restorePreview.modules?.templates}
-                          onChange={(e) => setRestoreTemplates(e.target.checked)}
-                        />
-                        <span className="module-label">
-                          <span className="module-name">免疫模板</span>
-                          <span className="module-count">
-                            {restorePreview.modules?.templates
-                              ? `${restorePreview.rawData?.templates?.length || 0} 个模板（将被覆盖）`
-                              : '备份中不包含'}
-                          </span>
-                        </span>
-                      </label>
-                      <label className={`module-checkbox ${!restorePreview.modules?.rules ? 'disabled' : ''}`}>
-                        <input
-                          type="checkbox"
-                          checked={restorePreview.modules?.rules ? restoreRules : false}
-                          disabled={!restorePreview.modules?.rules}
-                          onChange={(e) => setRestoreRules(e.target.checked)}
-                        />
-                        <span className="module-label">
-                          <span className="module-name">提醒规则</span>
-                          <span className="module-count">
-                            {restorePreview.modules?.rules
-                              ? `${restorePreview.rawData?.rules?.length || 0} 条规则（将被覆盖）`
-                              : '备份中不包含'}
-                          </span>
-                        </span>
-                      </label>
-                      <label className={`module-checkbox ${!restorePreview.modules?.filters ? 'disabled' : ''}`}>
-                        <input
-                          type="checkbox"
-                          checked={restorePreview.modules?.filters ? restoreFilters : false}
-                          disabled={!restorePreview.modules?.filters}
-                          onChange={(e) => setRestoreFilters(e.target.checked)}
-                        />
-                        <span className="module-label">
-                          <span className="module-name">筛选条件</span>
-                          <span className="module-count">
-                            {restorePreview.modules?.filters
-                              ? '包含（将被覆盖）'
-                              : '备份中不包含'}
-                          </span>
-                        </span>
-                      </label>
-                      <label className={`module-checkbox ${!restorePreview.modules?.groupMode ? 'disabled' : ''}`}>
-                        <input
-                          type="checkbox"
-                          checked={restorePreview.modules?.groupMode ? restoreGroupMode : false}
-                          disabled={!restorePreview.modules?.groupMode}
-                          onChange={(e) => setRestoreGroupMode(e.target.checked)}
-                        />
-                        <span className="module-label">
-                          <span className="module-name">分组模式</span>
-                          <span className="module-count">
-                            {restorePreview.modules?.groupMode
-                              ? '包含（将被覆盖）'
-                              : '备份中不包含'}
-                          </span>
-                        </span>
-                      </label>
-                    </div>
-                  </div>
-                )}
-
                 {restorePreview && restorePreview.validation && (restorePreview.validation.allWarnings || []).length > 0 && (
                   <div className="warnings-section">
                     <h3><AlertTriangle size={16} className="warning-icon" />警告</h3>
@@ -5692,45 +3900,43 @@ function App() {
                   </div>
                 )}
 
-                {restoreRecords && (
-                  <div className="restore-summary">
-                    <h3><Info size={16} />记录恢复统计</h3>
-                    <div className="summary-cards">
-                      <div className="summary-card add-card">
-                        <div className="summary-icon add-icon">
-                          <Plus size={24} />
-                        </div>
-                        <div className="summary-content">
-                          <span className="summary-label">新增记录</span>
-                          <span className="summary-value">{restorePreview.changes.addCount}</span>
-                        </div>
+                <div className="restore-summary">
+                  <h3><Info size={16} />恢复统计</h3>
+                  <div className="summary-cards">
+                    <div className="summary-card add-card">
+                      <div className="summary-icon add-icon">
+                        <Plus size={24} />
                       </div>
-                      <div className="summary-card overwrite-card">
-                        <div className="summary-icon overwrite-icon">
-                          <Edit3 size={24} />
-                        </div>
-                        <div className="summary-content">
-                          <span className="summary-label">覆盖记录</span>
-                          <span className="summary-value">{restorePreview.changes.overwriteCount}</span>
-                        </div>
-                      </div>
-                      <div className="summary-card skip-card">
-                        <div className="summary-icon skip-icon">
-                          <X size={24} />
-                        </div>
-                        <div className="summary-content">
-                          <span className="summary-label">跳过记录</span>
-                          <span className="summary-value">{restorePreview.changes.skipCount}</span>
-                        </div>
+                      <div className="summary-content">
+                        <span className="summary-label">新增记录</span>
+                        <span className="summary-value">{restorePreview.changes.addCount}</span>
                       </div>
                     </div>
-                    <div className="summary-total">
-                      有效记录：{restorePreview.changes.totalValid} 条 / 当前记录：{records.length} 条
+                    <div className="summary-card overwrite-card">
+                      <div className="summary-icon overwrite-icon">
+                        <Edit3 size={24} />
+                      </div>
+                      <div className="summary-content">
+                        <span className="summary-label">覆盖记录</span>
+                        <span className="summary-value">{restorePreview.changes.overwriteCount}</span>
+                      </div>
+                    </div>
+                    <div className="summary-card skip-card">
+                      <div className="summary-icon skip-icon">
+                        <X size={24} />
+                      </div>
+                      <div className="summary-content">
+                        <span className="summary-label">跳过记录</span>
+                        <span className="summary-value">{restorePreview.changes.skipCount}</span>
+                      </div>
                     </div>
                   </div>
-                )}
+                  <div className="summary-total">
+                    有效记录：{restorePreview.changes.totalValid} 条 / 当前记录：{records.length} 条
+                  </div>
+                </div>
 
-                {restoreRecords && restorePreview.changes.overwriteCount > 0 && (
+                {restorePreview.changes.overwriteCount > 0 && (
                   <div className="overwrite-preview-section">
                     <h3><AlertTriangle size={16} className="warning-icon" />将被覆盖的记录（前5条）</h3>
                     <div className="overwrite-table-container">
@@ -5764,7 +3970,7 @@ function App() {
                   </div>
                 )}
 
-                {restoreRecords && restorePreview.changes.addCount > 0 && (
+                {restorePreview.changes.addCount > 0 && (
                   <div className="add-preview-section">
                     <h3><CheckCircle2 size={16} className="success-icon" />将新增的记录（前5条）</h3>
                     <div className="preview-table-container">
@@ -5796,7 +4002,7 @@ function App() {
                   </div>
                 )}
 
-                {restoreRecords && restorePreview.changes.skipCount > 0 && (
+                {restorePreview.changes.skipCount > 0 && (
                   <div className="skip-preview-section">
                     <h3><Info size={16} className="info-icon" />将跳过的记录（前5条）</h3>
                     <div className="skip-table-container">
@@ -5833,153 +4039,13 @@ function App() {
                   type="button"
                   className="btn-primary"
                   onClick={confirmRestore}
-                  disabled={!restoreRecords && !restoreTemplates && !restoreRules && !restoreFilters && !restoreGroupMode}
+                  disabled={restorePreview.changes.addCount === 0 && restorePreview.changes.overwriteCount === 0}
                 >
                   <CheckCheck size={16} />
-                  确认恢复
+                  确认恢复（新增 {restorePreview.changes.addCount}，覆盖 {restorePreview.changes.overwriteCount}）
                 </button>
               </div>
             )}
-          </div>
-        </div>
-      )}
-
-      {showBatchContactModal && (
-        <div className="modal-overlay" onClick={() => { setShowBatchContactModal(false); setBatchContactOperator(''); }}>
-          <div className="modal-content import-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <div className="modal-title">
-                <CheckCircle2 size={20} />
-                <h2>批量标记为已联系</h2>
-              </div>
-              <button type="button" className="modal-close" onClick={() => { setShowBatchContactModal(false); setBatchContactOperator(''); }}>
-                <X size={20} />
-              </button>
-            </div>
-
-            <div className="modal-body">
-              <div className="batch-confirm-section">
-                <div className="batch-impact-summary">
-                  <div className="impact-card">
-                    <div className="impact-icon">
-                      <Users size={24} />
-                    </div>
-                    <div className="impact-content">
-                      <span className="impact-label">影响记录数</span>
-                      <span className="impact-value">{selectedPendingCount}</span>
-                    </div>
-                  </div>
-                  <div className="impact-card">
-                    <div className="impact-icon">
-                      <PawPrint size={24} />
-                    </div>
-                    <div className="impact-content">
-                      <span className="impact-label">涉及宠物</span>
-                      <span className="impact-value">
-                        {new Set(
-                          Array.from(selectedContactIds)
-                            .map(id => allContactRecords.find(r => r.id === id))
-                            .filter(r => r && r.status === '待联系')
-                            .map(r => r.ownerPhone)
-                        ).size}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="batch-preview-section">
-                  <div className="section-title">
-                    <Info size={16} />
-                    <h3>操作说明</h3>
-                  </div>
-                  <ul className="batch-hints">
-                    <li>所有选中的 <strong>{selectedPendingCount}</strong> 条"待联系"记录将被标记为"已联系"</li>
-                    <li>已处于"已联系"或"已接种"状态的记录不会被修改</li>
-                    <li>所有记录将写入 <strong>同一条时间线记录</strong>，操作时间和操作人保持一致</li>
-                    <li>操作完成后，详情、主人档案和统计数据将立即同步更新</li>
-                  </ul>
-                </div>
-
-                <div className="batch-preview-section">
-                  <div className="section-title">
-                    <ClipboardList size={16} />
-                    <h3>待处理记录预览（前10条）</h3>
-                  </div>
-                  <div className="preview-table-container">
-                    <table className="preview-table">
-                      <thead>
-                        <tr>
-                          <th>宠物姓名</th>
-                          <th>主人联系方式</th>
-                          <th>疫苗类型</th>
-                          <th>当前状态</th>
-                          <th>分组</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {Array.from(selectedContactIds)
-                          .map(id => allContactRecords.find(r => r.id === id))
-                          .filter(r => r && r.status === '待联系')
-                          .slice(0, 10)
-                          .map((item) => (
-                            <tr key={item.id}>
-                              <td>{item.pet}</td>
-                              <td>{item.ownerPhone}</td>
-                              <td>{item.vaccine}</td>
-                              <td><span className={`status ${statusClass(item.status)}`}>{item.status}</span></td>
-                              <td>
-                                {isOverdue(item.nextDate) ? '逾期' : isToday(item.nextDate) ? '今日' : '即将到期'}
-                              </td>
-                            </tr>
-                          ))}
-                      </tbody>
-                    </table>
-                    {selectedPendingCount > 10 && (
-                      <p className="more-records">... 还有 {selectedPendingCount - 10} 条记录</p>
-                    )}
-                  </div>
-                </div>
-
-                <div className="form-field">
-                  <label>
-                    <span>操作人姓名</span>
-                    <input
-                      type="text"
-                      value={batchContactOperator}
-                      onChange={(e) => setBatchContactOperator(e.target.value)}
-                      placeholder="请输入操作人姓名（可选）"
-                    />
-                  </label>
-                  <span className="field-hint">时间线记录中将显示操作人，留空则显示"批量操作"</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="modal-footer">
-              <button type="button" className="btn-secondary" onClick={() => { setShowBatchContactModal(false); setBatchContactOperator(''); }}>
-                取消
-              </button>
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={() => {
-                  const pendingIds = new Set(
-                    Array.from(selectedContactIds)
-                      .filter(id => {
-                        const item = allContactRecords.find(r => r.id === id);
-                        return item && item.status === '待联系';
-                      })
-                  );
-                  batchUpdateStatus(pendingIds, '已联系', batchContactOperator);
-                  setShowBatchContactModal(false);
-                  setBatchContactOperator('');
-                }}
-                disabled={selectedPendingCount === 0}
-              >
-                <CheckCheck size={16} />
-                确认批量标记 {selectedPendingCount} 条记录为已联系
-              </button>
-            </div>
           </div>
         </div>
       )}
@@ -6155,13 +4221,13 @@ function App() {
                       value={storeImportTargetId}
                       onChange={(e) => setStoreImportTargetId(e.target.value)}
                     >
-                      <option value="">请选择要恢复的门店</option>
+                      <option value="">请选择要覆盖的门店</option>
                       {stores.map((s) => (
                         <option key={s.id} value={s.id}>{s.name}</option>
                       ))}
                     </select>
                   </label>
-                  <p className="hint">选择目标门店后，可选择需要恢复的模块分别进行恢复</p>
+                  <p className="hint">选择目标门店后，导入的数据将覆盖该门店的所有现有数据</p>
 
                   <div
                     className="import-drop-zone"
@@ -6202,108 +4268,11 @@ function App() {
                       </h4>
                       <p>文件名：{storeImportPreview.fileName}</p>
                       {storeImportPreview.valid && (
-                        <>
-                          <div className="import-stats">
-                            <span>记录数：{storeImportPreview.recordCount}</span>
-                            {storeImportPreview.modules?.templates && <span>模板数：{storeImportPreview.templateCount}</span>}
-                            {storeImportPreview.modules?.rules && <span>规则数：{storeImportPreview.ruleCount}</span>}
-                          </div>
-                          {storeImportPreview.modules?.isLegacyFormat ? (
-                            <div className="import-modules-legacy">
-                              <p className="legacy-hint">⚠️ 旧版备份仅包含记录数据，将按原有逻辑恢复</p>
-                              <label className="module-checkbox disabled">
-                                <input
-                                  type="checkbox"
-                                  checked={importRestoreRecords}
-                                  disabled
-                                />
-                                <span className="module-label">
-                                  <span className="module-name">客户记录</span>
-                                  <span className="module-count">{storeImportPreview.recordCount} 条记录</span>
-                                </span>
-                              </label>
-                            </div>
-                          ) : (
-                            <div className="import-modules">
-                              <p className="modules-title">选择要恢复的模块：</p>
-                              <label className="module-checkbox">
-                                <input
-                                  type="checkbox"
-                                  checked={importRestoreRecords}
-                                  onChange={(e) => setImportRestoreRecords(e.target.checked)}
-                                />
-                                <span className="module-label">
-                                  <span className="module-name">客户记录</span>
-                                  <span className="module-count">{storeImportPreview.recordCount} 条记录</span>
-                                </span>
-                              </label>
-                              <label className={`module-checkbox ${!storeImportPreview.modules?.templates ? 'disabled' : ''}`}>
-                                <input
-                                  type="checkbox"
-                                  checked={storeImportPreview.modules?.templates ? importRestoreTemplates : false}
-                                  disabled={!storeImportPreview.modules?.templates}
-                                  onChange={(e) => setImportRestoreTemplates(e.target.checked)}
-                                />
-                                <span className="module-label">
-                                  <span className="module-name">免疫模板</span>
-                                  <span className="module-count">
-                                    {storeImportPreview.modules?.templates
-                                      ? `${storeImportPreview.templateCount} 个模板（将被覆盖）`
-                                      : '备份中不包含'}
-                                  </span>
-                                </span>
-                              </label>
-                              <label className={`module-checkbox ${!storeImportPreview.modules?.rules ? 'disabled' : ''}`}>
-                                <input
-                                  type="checkbox"
-                                  checked={storeImportPreview.modules?.rules ? importRestoreRules : false}
-                                  disabled={!storeImportPreview.modules?.rules}
-                                  onChange={(e) => setImportRestoreRules(e.target.checked)}
-                                />
-                                <span className="module-label">
-                                  <span className="module-name">提醒规则</span>
-                                  <span className="module-count">
-                                    {storeImportPreview.modules?.rules
-                                      ? `${storeImportPreview.ruleCount} 条规则（将被覆盖）`
-                                      : '备份中不包含'}
-                                  </span>
-                                </span>
-                              </label>
-                              <label className={`module-checkbox ${!storeImportPreview.modules?.filters ? 'disabled' : ''}`}>
-                                <input
-                                  type="checkbox"
-                                  checked={storeImportPreview.modules?.filters ? importRestoreFilters : false}
-                                  disabled={!storeImportPreview.modules?.filters}
-                                  onChange={(e) => setImportRestoreFilters(e.target.checked)}
-                                />
-                                <span className="module-label">
-                                  <span className="module-name">筛选条件</span>
-                                  <span className="module-count">
-                                    {storeImportPreview.modules?.filters
-                                      ? '包含（将被覆盖）'
-                                      : '备份中不包含'}
-                                  </span>
-                                </span>
-                              </label>
-                              <label className={`module-checkbox ${!storeImportPreview.modules?.groupMode ? 'disabled' : ''}`}>
-                                <input
-                                  type="checkbox"
-                                  checked={storeImportPreview.modules?.groupMode ? importRestoreGroupMode : false}
-                                  disabled={!storeImportPreview.modules?.groupMode}
-                                  onChange={(e) => setImportRestoreGroupMode(e.target.checked)}
-                                />
-                                <span className="module-label">
-                                  <span className="module-name">分组模式</span>
-                                  <span className="module-count">
-                                    {storeImportPreview.modules?.groupMode
-                                      ? '包含（将被覆盖）'
-                                      : '备份中不包含'}
-                                  </span>
-                                </span>
-                              </label>
-                            </div>
-                          )}
-                        </>
+                        <div className="import-stats">
+                          <span>记录数：{storeImportPreview.recordCount}</span>
+                          <span>模板数：{storeImportPreview.templateCount}</span>
+                          <span>规则数：{storeImportPreview.ruleCount}</span>
+                        </div>
                       )}
                       {storeImportPreview.errors.length > 0 && (
                         <div className="import-errors">
