@@ -470,6 +470,11 @@ function stringSimilarity(a, b) {
   return 1 - distance / maxLen;
 }
 
+function normalizePhoneGlobal(phone) {
+  if (!phone) return '';
+  return String(phone).replace(/\s|-/g, '');
+}
+
 function normalizePetName(name) {
   if (!name) return '';
   return String(name)
@@ -511,16 +516,17 @@ function scanAllStoresForDuplicates(currentStoreId) {
     }
   });
 
+  const duplicateGroups = [];
+  const usedRecordKeys = new Set();
+
   const phoneGroups = {};
   allRecords.forEach(record => {
-    const phone = normalizePhone(record.ownerPhone);
+    const phone = normalizePhoneGlobal(record.ownerPhone);
     if (phone) {
       if (!phoneGroups[phone]) phoneGroups[phone] = [];
       phoneGroups[phone].push(record);
     }
   });
-
-  const duplicateGroups = [];
 
   Object.entries(phoneGroups).forEach(([phone, records]) => {
     const storeIds = new Set(records.map(r => r._storeId));
@@ -537,26 +543,51 @@ function scanAllStoresForDuplicates(currentStoreId) {
           storeIds: [...storeIds],
           confidence: 1.0
         });
+        records.forEach(r => usedRecordKeys.add(`${r._storeId}:${r.id}`));
       }
     }
   });
 
-  const noPhoneRecords = allRecords.filter(r => !normalizePhone(r.ownerPhone));
-  for (let i = 0; i < noPhoneRecords.length; i++) {
-    for (let j = i + 1; j < noPhoneRecords.length; j++) {
-      const r1 = noPhoneRecords[i];
-      const r2 = noPhoneRecords[j];
+  for (let i = 0; i < allRecords.length; i++) {
+    for (let j = i + 1; j < allRecords.length; j++) {
+      const r1 = allRecords[i];
+      const r2 = allRecords[j];
+
       if (r1._storeId === r2._storeId) continue;
       if (r1.species && r2.species && r1.species !== r2.species) continue;
+
+      const key1 = `${r1._storeId}:${r1.id}`;
+      const key2 = `${r2._storeId}:${r2.id}`;
+
+      const phone1 = normalizePhoneGlobal(r1.ownerPhone);
+      const phone2 = normalizePhoneGlobal(r2.ownerPhone);
+      if (phone1 && phone2 && phone1 === phone2) continue;
+
       const similarity = stringSimilarity(normalizePetName(r1.pet), normalizePetName(r2.pet));
-      if (similarity >= 0.8) {
+      if (similarity >= 0.78) {
         const groupKey = `pet:${[r1._storeId, r2._storeId].sort().join('-')}:${[r1.id, r2.id].sort().join('-')}`;
         if (!ignoredKeys.has(groupKey)) {
-          const existingGroup = duplicateGroups.find(g =>
-            g.records.some(r => r.id === r1.id && r._storeId === r1._storeId) ||
-            g.records.some(r => r.id === r2.id && r._storeId === r2._storeId)
+          let targetGroup = duplicateGroups.find(g =>
+            g.type === 'pet' && (
+              g.records.some(r => r.id === r1.id && r._storeId === r1._storeId) ||
+              g.records.some(r => r.id === r2.id && r._storeId === r2._storeId)
+            )
           );
-          if (!existingGroup) {
+
+          if (targetGroup) {
+            const hasR1 = targetGroup.records.some(r => r.id === r1.id && r._storeId === r1._storeId);
+            const hasR2 = targetGroup.records.some(r => r.id === r2.id && r._storeId === r2._storeId);
+            if (!hasR1) {
+              targetGroup.records.push(r1);
+              targetGroup.storeIds = [...new Set([...targetGroup.storeIds, r1._storeId])];
+            }
+            if (!hasR2) {
+              targetGroup.records.push(r2);
+              targetGroup.storeIds = [...new Set([...targetGroup.storeIds, r2._storeId])];
+            }
+            const minSim = Math.min(targetGroup.confidence, similarity);
+            targetGroup.confidence = minSim;
+          } else {
             duplicateGroups.push({
               id: uid(),
               key: groupKey,
@@ -568,6 +599,8 @@ function scanAllStoresForDuplicates(currentStoreId) {
               confidence: similarity
             });
           }
+          usedRecordKeys.add(key1);
+          usedRecordKeys.add(key2);
         }
       }
     }
@@ -575,6 +608,7 @@ function scanAllStoresForDuplicates(currentStoreId) {
 
   duplicateGroups.sort((a, b) => {
     if (a.type !== b.type) return a.type === 'phone' ? -1 : 1;
+    if (b.confidence !== a.confidence) return b.confidence - a.confidence;
     return b.records.length - a.records.length;
   });
 
