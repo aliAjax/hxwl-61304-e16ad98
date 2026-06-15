@@ -2631,6 +2631,123 @@ function App() {
     };
   }
 
+  function getGroupForRecordWithRule(item, ruleOverride) {
+    const effectiveRule = ruleOverride && ruleOverride.vaccine === item.vaccine ? ruleOverride : getRuleForVaccine(item.vaccine, rules);
+    const autoGroup = effectiveRule ? (effectiveRule.autoGroup || 'overdue') : getAutoGroupForVaccine(item.vaccine, rules);
+    const effectiveRules = ruleOverride
+      ? rules.map(r => r.vaccine === ruleOverride.vaccine ? ruleOverride : r)
+      : rules;
+
+    let key;
+    if (autoGroup === 'vaccine') {
+      key = item.vaccine || '未分类';
+    } else if (autoGroup === 'status') {
+      key = item.status || '未知';
+    } else if (autoGroup === 'overdue') {
+      if (isOverdue(item.nextDate)) {
+        const diff = Math.abs(daysDiff(item.nextDate));
+        const level = ruleOverride && ruleOverride.vaccine === item.vaccine
+          ? (() => {
+              if (!ruleOverride.overdueLevels || ruleOverride.overdueLevels.length === 0) {
+                if (diff <= 7) return { label: '轻度逾期', level: 0 };
+                if (diff <= 30) return { label: '中度逾期', level: 1 };
+                return { label: '重度逾期', level: 2 };
+              }
+              for (let i = 0; i < ruleOverride.overdueLevels.length; i++) {
+                const ol = ruleOverride.overdueLevels[i];
+                if (diff >= ol.min && diff <= ol.max) {
+                  return { label: ol.label, level: i };
+                }
+              }
+              const last = ruleOverride.overdueLevels[ruleOverride.overdueLevels.length - 1];
+              return { label: last.label, level: ruleOverride.overdueLevels.length - 1 };
+            })()
+          : getOverdueLevel(diff, item.vaccine, effectiveRules);
+        key = level ? level.label : '逾期';
+      } else if (isToday(item.nextDate)) {
+        key = '今日到期';
+      } else {
+        const adv = ruleOverride && ruleOverride.vaccine === item.vaccine
+          ? (ruleOverride.advanceDays || 7)
+          : getAdvanceDays(item.vaccine, effectiveRules);
+        if (isWithinNextDays(item.nextDate, adv)) {
+          key = '即将到期';
+        } else {
+          key = '未到提醒期';
+        }
+      }
+    } else {
+      key = item[appConfig.dateKey] || item.date || item.enrollDate || '未排期';
+    }
+    return key;
+  }
+
+  const rulePreview = useMemo(() => {
+    if (!editingRule || !ruleForm.vaccine) return null;
+
+    const affectedVaccine = ruleForm.vaccine;
+    const affectedRecords = records.filter(item => item.vaccine === affectedVaccine);
+
+    const oldRule = rules.find(r => r.id === editingRule);
+    const newRule = { ...ruleForm, advanceDays: Number(ruleForm.advanceDays) || 7 };
+
+    const oldGroups = {};
+    const newGroups = {};
+
+    affectedRecords.forEach(item => {
+      const oldGroup = oldRule ? getGroupForRecordWithRule(item, oldRule) : getGroupForRecordWithRule(item, null);
+      const newGroup = getGroupForRecordWithRule(item, newRule);
+
+      if (!oldGroups[oldGroup]) oldGroups[oldGroup] = [];
+      oldGroups[oldGroup].push(item);
+
+      if (!newGroups[newGroup]) newGroups[newGroup] = [];
+      newGroups[newGroup].push(item);
+    });
+
+    const allGroupKeys = new Set([...Object.keys(oldGroups), ...Object.keys(newGroups)]);
+    const comparison = [];
+    allGroupKeys.forEach(key => {
+      const oldCount = (oldGroups[key] || []).length;
+      const newCount = (newGroups[key] || []).length;
+      comparison.push({
+        group: key,
+        oldCount,
+        newCount,
+        diff: newCount - oldCount,
+        sampleRecords: (newGroups[key] || []).slice(0, 5)
+      });
+    });
+
+    const changedCount = affectedRecords.filter(item => {
+      const oldGroup = oldRule ? getGroupForRecordWithRule(item, oldRule) : getGroupForRecordWithRule(item, null);
+      const newGroup = getGroupForRecordWithRule(item, newRule);
+      return oldGroup !== newGroup;
+    }).length;
+
+    return {
+      vaccine: affectedVaccine,
+      totalAffected: affectedRecords.length,
+      changedCount,
+      comparison: comparison.sort((a, b) => b.newCount - a.newCount),
+      sampleAffected: affectedRecords.slice(0, 10)
+    };
+  }, [editingRule, ruleForm, records, rules]);
+
+  function getGroupTagClass(groupName) {
+    if (!groupName) return 'group-tag-default';
+    const g = groupName;
+    if (g.includes('重度') || g.includes('危急')) return 'group-tag-danger';
+    if (g.includes('中度')) return 'group-tag-warning';
+    if (g.includes('轻度') || g.includes('逾期')) return 'group-tag-caution';
+    if (g.includes('今日到期') || g.includes('即将到期')) return 'group-tag-soon';
+    if (g.includes('未到') || g.includes('未排期')) return 'group-tag-muted';
+    if (g.includes('已接种') || g.includes('完成')) return 'group-tag-success';
+    if (g.includes('已联系')) return 'group-tag-info';
+    if (g.includes('待联系')) return 'group-tag-pending';
+    return 'group-tag-default';
+  }
+
   function prevMonth() {
     setCalendarDate(new Date(calendarDate.getFullYear(), calendarDate.getMonth() - 1, 1));
     setSelectedCalendarDay(null);
@@ -3590,6 +3707,107 @@ function App() {
                   恢复默认规则
                 </button>
               </div>
+
+              {rulePreview && (
+                <div className="rule-preview-panel">
+                  <div className="panel-title">
+                    <Zap size={18} />
+                    <h2>规则生效预览</h2>
+                    <span className="template-count">实时</span>
+                  </div>
+                  <div className="rule-preview-summary">
+                    <div className="preview-summary-item">
+                      <span className="preview-summary-icon">
+                        <Info size={16} />
+                      </span>
+                      <div>
+                        <p className="preview-summary-label">受影响疫苗</p>
+                        <p className="preview-summary-value">{rulePreview.vaccine}</p>
+                      </div>
+                    </div>
+                    <div className="preview-summary-item">
+                      <span className="preview-summary-icon">
+                        <Users size={16} />
+                      </span>
+                      <div>
+                        <p className="preview-summary-label">门店受影响记录</p>
+                        <p className="preview-summary-value">{rulePreview.totalAffected} 条</p>
+                      </div>
+                    </div>
+                    <div className="preview-summary-item">
+                      <span className={`preview-summary-icon ${rulePreview.changedCount > 0 ? 'icon-change' : ''}`}>
+                        <CheckCheck size={16} />
+                      </span>
+                      <div>
+                        <p className="preview-summary-label">分组将发生变化</p>
+                        <p className={`preview-summary-value ${rulePreview.changedCount > 0 ? 'value-change' : ''}`}>
+                          {rulePreview.changedCount} 条
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rule-preview-hint">
+                    <AlertCircle size={14} />
+                    <span>以下为新规则生效后的分组分布。保存前不会修改任何真实记录。</span>
+                  </div>
+
+                  <div className="preview-comparison-table">
+                    <div className="comparison-header">
+                      <span className="comparison-col-group">提醒分组</span>
+                      <span className="comparison-col-num">原规则</span>
+                      <span className="comparison-col-num">新规则</span>
+                      <span className="comparison-col-num">变化</span>
+                    </div>
+                    {rulePreview.comparison.map((row) => (
+                      <div className="comparison-row" key={row.group}>
+                        <span className="comparison-col-group">
+                          <span className={`group-tag ${getGroupTagClass(row.group)}`}>{row.group}</span>
+                        </span>
+                        <span className="comparison-col-num">{row.oldCount}</span>
+                        <span className="comparison-col-num comparison-highlight">{row.newCount}</span>
+                        <span className={`comparison-col-num ${row.diff > 0 ? 'diff-up' : row.diff < 0 ? 'diff-down' : ''}`}>
+                          {row.diff > 0 ? `+${row.diff}` : row.diff === 0 ? '—' : row.diff}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {rulePreview.sampleAffected.length > 0 && (
+                    <div className="preview-samples">
+                      <p className="preview-samples-title">
+                        <PawPrint size={14} /> 受影响记录示例（最多展示10条）
+                      </p>
+                      <div className="preview-samples-list">
+                        {rulePreview.sampleAffected.map((item) => {
+                          const oldRule = rules.find(r => r.id === editingRule);
+                          const newRule = { ...ruleForm, advanceDays: Number(ruleForm.advanceDays) || 7 };
+                          const oldGroup = oldRule ? getGroupForRecordWithRule(item, oldRule) : getGroupForRecordWithRule(item, null);
+                          const newGroup = getGroupForRecordWithRule(item, newRule);
+                          const hasChange = oldGroup !== newGroup;
+                          return (
+                            <div className={`preview-sample-item ${hasChange ? 'sample-changed' : ''}`} key={item.id}>
+                              <div className="sample-info">
+                                <p className="sample-pet">{item.pet}</p>
+                                <p className="sample-meta">{item.species} · {item.ownerPhone}</p>
+                              </div>
+                              <div className="sample-date">
+                                <CalendarDays size={12} />
+                                <span>{item.nextDate || '无日期'}</span>
+                              </div>
+                              <div className="sample-group-transition">
+                                <span className={`group-tag ${getGroupTagClass(oldGroup)}`}>{oldGroup}</span>
+                                <ChevronRight size={14} className="arrow-icon" />
+                                <span className={`group-tag ${getGroupTagClass(newGroup)}`}>{newGroup}</span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="panel rules-list-panel">
