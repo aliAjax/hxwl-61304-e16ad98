@@ -2659,6 +2659,34 @@ function App() {
     };
   }
 
+  const calendarMonthStats = useMemo(() => {
+    const stats = {
+      total: 0,
+      pending: 0,
+      done: 0,
+      upcoming: 0,
+      overdue: 0,
+      overdueByLevel: {}
+    };
+
+    Object.keys(calendarRecords).forEach(date => {
+      const d = new Date(date);
+      if (d.getFullYear() !== calendarDate.getFullYear() || d.getMonth() !== calendarDate.getMonth()) return;
+
+      const dayStats = getDayStats(date);
+      stats.total += dayStats.total;
+      stats.pending += dayStats.pending;
+      stats.done += dayStats.done;
+      stats.upcoming += dayStats.upcoming;
+      Object.entries(dayStats.overdueByLevel).forEach(([level, count]) => {
+        stats.overdue += count;
+        stats.overdueByLevel[level] = (stats.overdueByLevel[level] || 0) + count;
+      });
+    });
+
+    return stats;
+  }, [calendarRecords, calendarDate, rules]);
+
   function getGroupForRecordWithRule(item, ruleOverride) {
     const effectiveRule = ruleOverride && ruleOverride.vaccine === item.vaccine ? ruleOverride : getRuleForVaccine(item.vaccine, rules);
     const autoGroup = effectiveRule ? (effectiveRule.autoGroup || 'overdue') : getAutoGroupForVaccine(item.vaccine, rules);
@@ -2971,24 +2999,23 @@ function App() {
           <>
             <article className="metric">
               <span>本月提醒</span>
-              <strong>{Object.entries(calendarRecords).filter(([date]) => {
-                const d = new Date(date);
-                return d.getFullYear() === calendarDate.getFullYear() && d.getMonth() === calendarDate.getMonth();
-              }).reduce((sum, [, items]) => sum + items.length, 0)}</strong>
+              <strong>{calendarMonthStats.total}</strong>
             </article>
             <article className="metric">
               <span>本月待联系</span>
-              <strong>{Object.entries(calendarRecords).filter(([date]) => {
-                const d = new Date(date);
-                return d.getFullYear() === calendarDate.getFullYear() && d.getMonth() === calendarDate.getMonth();
-              }).reduce((sum, [, items]) => sum + items.filter(i => i.status === '待联系').length, 0)}</strong>
+              <strong>{calendarMonthStats.pending}</strong>
             </article>
             <article className="metric">
               <span>本月已接种</span>
-              <strong>{Object.entries(calendarRecords).filter(([date]) => {
-                const d = new Date(date);
-                return d.getFullYear() === calendarDate.getFullYear() && d.getMonth() === calendarDate.getMonth();
-              }).reduce((sum, [, items]) => sum + items.filter(i => i.status === '已接种').length, 0)}</strong>
+              <strong>{calendarMonthStats.done}</strong>
+            </article>
+            <article className="metric">
+              <span>本月即将到期</span>
+              <strong>{calendarMonthStats.upcoming}</strong>
+            </article>
+            <article className="metric">
+              <span>本月逾期</span>
+              <strong>{calendarMonthStats.overdue}</strong>
             </article>
           </>
         ) : currentView === 'rules' ? (
