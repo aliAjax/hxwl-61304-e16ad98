@@ -2578,7 +2578,7 @@ function App() {
         }
         return acc;
       }, {});
-  }, [records, filters]);
+  }, [records, filters, rules]);
 
   function getCalendarDays(year, month) {
     const firstDay = new Date(year, month, 1);
@@ -2622,11 +2622,39 @@ function App() {
 
   function getDayStats(date) {
     const items = calendarRecords[date] || [];
+    const pending = items.filter(i => i.status === '待联系').length;
+    const contacted = items.filter(i => i.status === '已联系').length;
+    const done = items.filter(i => i.status === '已接种').length;
+
+    const upcoming = items.filter(i => {
+      if (!i.nextDate) return false;
+      if (isOverdue(i.nextDate) || isToday(i.nextDate)) return false;
+      const adv = getAdvanceDays(i.vaccine, rules);
+      return isWithinNextDays(i.nextDate, adv);
+    }).length;
+
+    const overdueByLevel = {};
+    let highestOverdueLevel = -1;
+    items.forEach(item => {
+      if (isOverdue(item.nextDate) && item.status === '待联系') {
+        const diff = Math.abs(daysDiff(item.nextDate));
+        const level = getOverdueLevel(diff, item.vaccine, rules);
+        const key = level ? level.label : '逾期';
+        overdueByLevel[key] = (overdueByLevel[key] || 0) + 1;
+        if (level && level.level > highestOverdueLevel) {
+          highestOverdueLevel = level.level;
+        }
+      }
+    });
+
     return {
       total: items.length,
-      pending: items.filter(i => i.status === '待联系').length,
-      contacted: items.filter(i => i.status === '已联系').length,
-      done: items.filter(i => i.status === '已接种').length,
+      pending,
+      contacted,
+      done,
+      upcoming,
+      overdueByLevel,
+      highestOverdueLevel,
       items,
     };
   }
@@ -3902,6 +3930,10 @@ function App() {
                 <span className="legend-dot legend-done"></span>
                 已接种
               </span>
+              <span className="legend-item">
+                <span className="legend-dot legend-upcoming"></span>
+                即将到期
+              </span>
             </div>
           </section>
 
@@ -3918,10 +3950,13 @@ function App() {
                   const isToday = day.date === today;
                   const isSelected = day.date === selectedCalendarDay;
                   const dayIsOverdue = isOverdue(day.date) && stats.pending > 0;
+                  const hasUpcoming = stats.upcoming > 0;
+                  const highestLevel = stats.highestOverdueLevel;
+                  const overdueClass = highestLevel >= 2 ? 'overdue-severe' : highestLevel === 1 ? 'overdue-moderate' : highestLevel === 0 ? 'overdue-mild' : '';
                   return (
                     <div
                       key={day.date}
-                      className={`calendar-day ${!day.isCurrentMonth ? 'other-month' : ''} ${isToday ? 'is-today' : ''} ${isSelected ? 'is-selected' : ''} ${dayIsOverdue ? 'is-overdue' : ''} ${stats.total > 0 ? 'has-records' : ''}`}
+                      className={`calendar-day ${!day.isCurrentMonth ? 'other-month' : ''} ${isToday ? 'is-today' : ''} ${isSelected ? 'is-selected' : ''} ${dayIsOverdue ? 'is-overdue ' + overdueClass : ''} ${hasUpcoming ? 'has-upcoming' : ''} ${stats.total > 0 ? 'has-records' : ''}`}
                       onClick={() => stats.total > 0 ? setSelectedCalendarDay(day.date) : null}
                     >
                       <div className="calendar-day-header">
@@ -3940,6 +3975,9 @@ function App() {
                           )}
                           {stats.done > 0 && (
                             <span className="day-stat stat-done">{stats.done}</span>
+                          )}
+                          {stats.upcoming > 0 && (
+                            <span className="day-stat stat-upcoming">{stats.upcoming}</span>
                           )}
                         </div>
                       )}
@@ -3975,7 +4013,28 @@ function App() {
                     <span className="day-stat-label">已接种</span>
                     <span className="day-stat-value stat-done">{getDayStats(selectedCalendarDay).done}</span>
                   </div>
+                  {getDayStats(selectedCalendarDay).upcoming > 0 && (
+                    <div className="day-stat-item">
+                      <span className="day-stat-label">即将到期</span>
+                      <span className="day-stat-value stat-upcoming">{getDayStats(selectedCalendarDay).upcoming}</span>
+                    </div>
+                  )}
                 </div>
+                {Object.keys(getDayStats(selectedCalendarDay).overdueByLevel).length > 0 && (
+                  <div className="day-detail-overdue">
+                    <p className="overdue-title">
+                      <AlertTriangle size={14} /> 逾期分布
+                    </p>
+                    <div className="overdue-level-list">
+                      {Object.entries(getDayStats(selectedCalendarDay).overdueByLevel).map(([level, count]) => (
+                        <div key={level} className="overdue-level-item">
+                          <span className={`group-tag ${getGroupTagClass(level)}`}>{level}</span>
+                          <span className="overdue-count">{count} 条</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 <div className="day-records-list">
                   {getDayStats(selectedCalendarDay).items.length === 0 ? (
                     <p className="empty-group">当天暂无提醒记录</p>

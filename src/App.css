@@ -2344,6 +2344,10 @@ textarea { min-height: 76px; resize: vertical; }
   background: #059669;
 }
 
+.legend-upcoming {
+  background: #3b82f6;
+}
+
 .calendar-main {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 380px;
@@ -2420,6 +2424,31 @@ textarea { min-height: 76px; resize: vertical; }
   background: #fef2f2;
 }
 
+.calendar-day.is-overdue.overdue-mild {
+  background: #fffbeb;
+  border-left: 3px solid #f59e0b;
+}
+
+.calendar-day.is-overdue.overdue-moderate {
+  background: #fff7ed;
+  border-left: 3px solid #ea580c;
+}
+
+.calendar-day.is-overdue.overdue-severe {
+  background: #fef2f2;
+  border-left: 3px solid #dc2626;
+  animation: overdue-pulse 2s ease-in-out infinite;
+}
+
+@keyframes overdue-pulse {
+  0%, 100% { box-shadow: inset 3px 0 0 0 #dc2626; }
+  50% { box-shadow: inset 3px 0 0 0 #fca5a5; }
+}
+
+.calendar-day.has-upcoming {
+  border-top: 3px solid #3b82f6;
+}
+
 .calendar-day.has-records {
   cursor: pointer;
 }
@@ -2485,6 +2514,11 @@ textarea { min-height: 76px; resize: vertical; }
   color: #047857;
 }
 
+.stat-upcoming {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
 .calendar-day-detail {
   max-height: 700px;
   overflow-y: auto;
@@ -2512,7 +2546,7 @@ textarea { min-height: 76px; resize: vertical; }
 
 .day-detail-stats {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
   gap: 10px;
   margin-bottom: 16px;
 }
@@ -2536,6 +2570,42 @@ textarea { min-height: 76px; resize: vertical; }
   display: block;
   font-size: 24px;
   font-weight: 800;
+}
+
+.day-detail-overdue {
+  margin-bottom: 16px;
+}
+
+.overdue-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 10px 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #92400e;
+}
+
+.overdue-level-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+}
+
+.overdue-level-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+}
+
+.overdue-count {
+  font-weight: 700;
+  color: #92400e;
 }
 
 .day-records-list {
