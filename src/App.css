@@ -1255,6 +1255,208 @@ textarea { min-height: 76px; resize: vertical; }
   border-color: var(--accent);
 }
 
+.health-section {
+  margin-top: 0;
+}
+
+.health-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.health-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.health-header .panel-title {
+  margin-bottom: 0;
+}
+
+.health-toolbar {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.health-toolbar .primary,
+.health-toolbar .btn-secondary {
+  width: auto;
+  margin-top: 0;
+}
+
+.health-risk-strip {
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  border-radius: 8px;
+  padding: 14px 16px;
+  color: #1e3a8a;
+}
+
+.health-risk-strip div {
+  display: grid;
+  gap: 4px;
+}
+
+.health-risk-strip span {
+  font-size: 13px;
+  color: #1d4ed8;
+}
+
+.health-empty,
+.health-ok {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  border: 1px dashed #d0d5dd;
+  border-radius: 8px;
+  padding: 22px;
+  color: #475467;
+}
+
+.health-empty {
+  flex-direction: column;
+  text-align: center;
+}
+
+.health-empty .primary {
+  width: auto;
+  min-width: 140px;
+}
+
+.health-ok {
+  border-style: solid;
+  border-color: #a7f3d0;
+  background: #ecfdf3;
+  color: #047857;
+}
+
+.health-ok div {
+  display: grid;
+  gap: 4px;
+}
+
+.health-ok span {
+  color: #059669;
+  font-size: 13px;
+}
+
+.health-issue-list {
+  display: grid;
+  gap: 12px;
+}
+
+.health-issue-card {
+  border: 1px solid #e4e7ec;
+  border-left-width: 4px;
+  border-radius: 8px;
+  padding: 16px;
+  background: #fff;
+  display: grid;
+  gap: 10px;
+}
+
+.health-issue-card.severity-critical {
+  border-left-color: #dc2626;
+}
+
+.health-issue-card.severity-warning {
+  border-left-color: #d97706;
+}
+
+.health-issue-card.severity-info {
+  border-left-color: #2563eb;
+}
+
+.health-issue-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.health-severity,
+.health-count {
+  border-radius: 999px;
+  padding: 4px 9px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.health-severity {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.severity-critical .health-severity {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.severity-info .health-severity {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.health-count {
+  margin-left: auto;
+  background: #f2f4f7;
+  color: #475467;
+}
+
+.health-issue-card p {
+  color: #475467;
+  line-height: 1.6;
+  font-size: 14px;
+}
+
+.health-action-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  border-top: 1px solid #eef2f6;
+  padding-top: 10px;
+  color: #344054;
+  font-size: 13px;
+}
+
+.health-action-row small {
+  color: #667085;
+}
+
+.health-fix-summary {
+  border: 1px solid #d1fae5;
+  background: #f0fdf4;
+  border-radius: 8px;
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+}
+
+.health-fix-summary h3 {
+  font-size: 15px;
+  color: #065f46;
+}
+
+.health-fix-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  background: #fff;
+  border: 1px solid #d1fae5;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.health-fix-item.failed {
+  border-color: #fecaca;
+  color: #991b1b;
+}
+
 .owner-section {
   margin-top: 0;
 }
@@ -2603,7 +2805,8 @@ textarea { min-height: 76px; resize: vertical; }
   margin-bottom: 12px;
 }
 
-.record-count-info {
+.record-count-info,
+.backup-count-grid {
   background: #fff;
   border: 1px solid #d1fae5;
   border-radius: 8px;
@@ -2617,6 +2820,29 @@ textarea { min-height: 76px; resize: vertical; }
   color: #059669;
   font-size: 18px;
   margin: 0 4px;
+}
+
+.backup-count-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  text-align: left;
+}
+
+.backup-count-grid span {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.backup-count-grid strong {
+  color: #059669;
+  font-size: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .warning-text {
@@ -2743,6 +2969,7 @@ textarea { min-height: 76px; resize: vertical; }
 .warnings-section,
 .errors-section,
 .restore-summary,
+.config-restore-summary,
 .overwrite-preview-section,
 .add-preview-section,
 .skip-preview-section {
@@ -2752,6 +2979,7 @@ textarea { min-height: 76px; resize: vertical; }
 .warnings-section h3,
 .errors-section h3,
 .restore-summary h3,
+.config-restore-summary h3,
 .overwrite-preview-section h3,
 .add-preview-section h3,
 .skip-preview-section h3 {
@@ -2916,6 +3144,41 @@ textarea { min-height: 76px; resize: vertical; }
   border-top: 1px solid #e5e7eb;
 }
 
+.config-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.config-summary-item {
+  display: grid;
+  gap: 4px;
+  padding: 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #f9fafb;
+}
+
+.config-summary-item.active {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+
+.config-summary-item span {
+  color: #667085;
+  font-size: 13px;
+}
+
+.config-summary-item strong {
+  color: #111827;
+  font-size: 22px;
+}
+
+.config-summary-item small {
+  color: #667085;
+  line-height: 1.4;
+}
+
 .skip-reason {
   color: #dc2626;
   font-weight: 600;
@@ -2986,6 +3249,10 @@ textarea { min-height: 76px; resize: vertical; }
   }
 
   .summary-cards {
+    grid-template-columns: 1fr;
+  }
+
+  .config-summary-grid {
     grid-template-columns: 1fr;
   }
 

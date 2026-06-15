@@ -1,5 +1,5 @@
 import { useMemo, useState, useRef, useEffect } from 'react';
-import { Syringe, Plus, Search, Trash2, RotateCcw, CheckCircle2, AlertTriangle, ClipboardList, CalendarDays, PhoneCall, Clock, AlertCircle, CalendarCheck, MessageSquareText, X, User, Calendar, Upload, FileText, AlertOctagon, CheckCheck, Info, Users, PawPrint, ArrowLeft, ChevronRight, Settings, Save, Edit3, Zap, Filter, PlusCircle, MinusCircle, Building2, Copy, Download, MoreHorizontal } from 'lucide-react';
+import { Syringe, Plus, Search, Trash2, RotateCcw, CheckCircle2, AlertTriangle, ClipboardList, CalendarDays, PhoneCall, Clock, AlertCircle, CalendarCheck, MessageSquareText, X, User, Calendar, Upload, FileText, AlertOctagon, CheckCheck, Info, Users, PawPrint, ArrowLeft, ChevronRight, Settings, Save, Edit3, Zap, Filter, PlusCircle, MinusCircle, Building2, Copy, Download, MoreHorizontal, ShieldCheck } from 'lucide-react';
 import './App.css';
 
 const appConfig = {
@@ -379,6 +379,7 @@ function withIds(items) {
 const STORES_META_KEY = appConfig.storage + '-stores-meta';
 const STORE_DATA_KEY_PREFIX = appConfig.storage + '-store-';
 const STORE_SCHEMA_VERSION = 1;
+const BACKUP_FORMAT_VERSION = 2;
 
 function getStoreMetaStorageKey() {
   return STORES_META_KEY;
@@ -723,6 +724,300 @@ function importStoreData(storeId, importData) {
   return true;
 }
 
+function safeParseStorageValue(key) {
+  const raw = localStorage.getItem(key);
+  if (raw === null) return { exists: false, value: null, error: null };
+  try {
+    return { exists: true, value: JSON.parse(raw), error: null };
+  } catch (error) {
+    return { exists: true, value: null, error };
+  }
+}
+
+function compareConfigList(a, b) {
+  return JSON.stringify(a || []) === JSON.stringify(b || []);
+}
+
+function detectDataHealthIssues() {
+  const issues = [];
+  const metaCheck = safeParseStorageValue(STORES_META_KEY);
+  const oldRecordCheck = safeParseStorageValue(appConfig.storage);
+
+  if (oldRecordCheck.exists && Array.isArray(oldRecordCheck.value) && oldRecordCheck.value.length > 0) {
+    issues.push({
+      id: 'legacy-single-store',
+      severity: 'warning',
+      title: '旧版单店数据残留',
+      risk: '旧版记录仍保留在单店存储键中，可能让导入恢复或旧逻辑读取到过期数据。',
+      action: '迁移到默认门店并清理旧版记录键',
+      fixable: true,
+      count: oldRecordCheck.value.length
+    });
+  } else if (oldRecordCheck.error) {
+    issues.push({
+      id: 'legacy-single-store-damaged',
+      severity: 'critical',
+      title: '旧版单店数据损坏',
+      risk: '旧版记录键不是有效JSON，无法确认其中是否还有未迁移数据。',
+      action: '导出安全备份后清理损坏的旧版记录键',
+      fixable: true,
+      count: 1
+    });
+  }
+
+  if (!metaCheck.exists || metaCheck.error || !metaCheck.value || !Array.isArray(metaCheck.value.stores) || metaCheck.value.stores.length === 0) {
+    issues.push({
+      id: 'stores-meta-missing',
+      severity: 'critical',
+      title: '多门店元数据缺失或损坏',
+      risk: '门店列表或当前门店指针不可用，门店切换与数据隔离可能失效。',
+      action: '重建默认门店元数据，并保留可读取的现有记录',
+      fixable: true,
+      count: 1
+    });
+    return issues;
+  }
+
+  const stores = metaCheck.value.stores;
+  const baseStore = stores[0];
+  const baseData = baseStore ? loadStoreData(baseStore.id) : null;
+
+  stores.forEach((store) => {
+    const key = getStoreDataKey(store.id);
+    const dataCheck = safeParseStorageValue(key);
+    if (!dataCheck.exists || dataCheck.error || !dataCheck.value || !Array.isArray(dataCheck.value.records)) {
+      issues.push({
+        id: `store-data-damaged:${store.id}`,
+        severity: 'critical',
+        title: `门店数据缺失或损坏：${store.name}`,
+        risk: '该门店记录无法读取，切换到此门店时会出现空数据或默认数据覆盖风险。',
+        action: '重建该门店的数据结构',
+        fixable: true,
+        storeId: store.id,
+        count: 1
+      });
+      return;
+    }
+
+    const data = dataCheck.value;
+    const missingTimeline = (data.records || []).filter((record) => !Array.isArray(record.timeline) || record.timeline.length === 0);
+    if (missingTimeline.length > 0) {
+      issues.push({
+        id: `records-missing-timeline:${store.id}`,
+        severity: 'warning',
+        title: `记录缺少timeline：${store.name}`,
+        risk: '状态流转历史不完整，恢复或审计时无法追踪原始状态来源。',
+        action: '为缺失记录补充当前状态的迁移时间线',
+        fixable: true,
+        storeId: store.id,
+        count: missingTimeline.length,
+        samples: missingTimeline.slice(0, 3).map((record) => record.pet || record.ownerPhone || record.id)
+      });
+    }
+
+    const missingNotes = (data.records || []).filter((record) => !Array.isArray(record.notes));
+    if (missingNotes.length > 0) {
+      issues.push({
+        id: `records-missing-notes:${store.id}`,
+        severity: 'warning',
+        title: `记录缺少notes：${store.name}`,
+        risk: '备注结构缺失会导致详情页备注区域和备份恢复数据结构不一致。',
+        action: '为缺失记录补充空备注数组',
+        fixable: true,
+        storeId: store.id,
+        count: missingNotes.length,
+        samples: missingNotes.slice(0, 3).map((record) => record.pet || record.ownerPhone || record.id)
+      });
+    }
+
+    if ((data.schemaVersion || 0) < STORE_SCHEMA_VERSION) {
+      issues.push({
+        id: `store-schema-old:${store.id}`,
+        severity: 'info',
+        title: `门店Schema版本过旧：${store.name}`,
+        risk: '旧Schema会让后续修复难以判断数据是否已经迁移。',
+        action: '更新门店Schema版本',
+        fixable: true,
+        storeId: store.id,
+        count: 1
+      });
+    }
+
+    if (baseData && store.id !== baseStore.id && !compareConfigList(data.templates, baseData.templates)) {
+      issues.push({
+        id: `templates-out-of-sync:${store.id}`,
+        severity: 'info',
+        title: `模板配置不同步：${store.name}`,
+        risk: '不同门店复种周期不一致时，同类记录可能计算出不同提醒日期。',
+        action: '同步为当前默认门店模板',
+        fixable: true,
+        storeId: store.id,
+        count: Math.max(data.templates?.length || 0, baseData.templates?.length || 0)
+      });
+    }
+
+    if (baseData && store.id !== baseStore.id && !compareConfigList(data.rules, baseData.rules)) {
+      issues.push({
+        id: `rules-out-of-sync:${store.id}`,
+        severity: 'info',
+        title: `规则配置不同步：${store.name}`,
+        risk: '提醒提前量、默认状态或逾期分级不一致会影响分组和联系优先级。',
+        action: '同步为当前默认门店规则',
+        fixable: true,
+        storeId: store.id,
+        count: Math.max(data.rules?.length || 0, baseData.rules?.length || 0)
+      });
+    }
+  });
+
+  return issues;
+}
+
+function severityLabel(severity) {
+  return {
+    critical: '高风险',
+    warning: '需关注',
+    info: '提示'
+  }[severity] || '提示';
+}
+
+function exportFullHealthBackup() {
+  const snapshot = {};
+  for (let index = 0; index < localStorage.length; index++) {
+    const key = localStorage.key(index);
+    if (key && key.startsWith(appConfig.storage)) {
+      snapshot[key] = localStorage.getItem(key);
+    }
+  }
+
+  const jsonStr = JSON.stringify({
+    version: BACKUP_FORMAT_VERSION,
+    type: 'health-snapshot',
+    exportedAt: new Date().toISOString(),
+    appId: appConfig.id,
+    storagePrefix: appConfig.storage,
+    snapshot
+  }, null, 2);
+  const blob = new Blob([jsonStr], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+  link.download = `健康备份_完整快照_${stamp}.json`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+function applyHealthFix(issue) {
+  const meta = loadStoresMeta();
+  const store = issue.storeId && meta?.stores?.find((item) => item.id === issue.storeId);
+
+  if (issue.id === 'legacy-single-store') {
+    const oldRecordCheck = safeParseStorageValue(appConfig.storage);
+    if (Array.isArray(oldRecordCheck.value) && oldRecordCheck.value.length > 0) {
+      const targetStoreId = meta?.currentStoreId || meta?.stores?.[0]?.id || initStores().storeId;
+      const targetData = loadStoreData(targetStoreId) || createDefaultStoreData();
+      const existingIds = new Set((targetData.records || []).map((record) => record.id));
+      const existingKeys = new Set((targetData.records || []).map((record) => `${normalizePhone(record.ownerPhone)}-${record.pet}-${record.vaccine}`));
+      const migratedRecords = oldRecordCheck.value
+        .map((record) => ({
+          ...record,
+          id: record.id || uid(),
+          ownerPhone: normalizePhone(record.ownerPhone || ''),
+          timeline: Array.isArray(record.timeline) && record.timeline.length > 0
+            ? record.timeline
+            : [{ status: record.status || appConfig.primaryStatus, at: today, by: '健康修复' }],
+          notes: Array.isArray(record.notes) ? record.notes : [],
+          status: record.status || appConfig.primaryStatus,
+          schemaVersion: record.schemaVersion || SCHEMA_VERSION
+        }))
+        .filter((record) => {
+          const key = `${record.ownerPhone}-${record.pet}-${record.vaccine}`;
+          if (existingIds.has(record.id) || existingKeys.has(key)) return false;
+          existingIds.add(record.id);
+          existingKeys.add(key);
+          return true;
+        });
+      persistStoreData(targetStoreId, {
+        ...targetData,
+        records: [...migratedRecords, ...(targetData.records || [])]
+      });
+    }
+    localStorage.removeItem(appConfig.storage);
+    return '已迁移并清理旧版单店存储键';
+  }
+
+  if (issue.id === 'legacy-single-store-damaged') {
+    localStorage.removeItem(appConfig.storage);
+    return '已清理损坏的旧版单店存储键';
+  }
+
+  if (issue.id === 'stores-meta-missing') {
+    const current = initStores();
+    persistStoresMeta(current.meta);
+    persistStoreData(current.storeId, current.storeData);
+    return '已重建默认门店元数据';
+  }
+
+  if (!store) return '未找到目标门店，已跳过';
+
+  const data = loadStoreData(store.id) || createDefaultStoreData();
+
+  if (issue.id.startsWith('store-data-damaged:')) {
+    persistStoreData(store.id, createDefaultStoreData());
+    return `已重建${store.name}的数据结构`;
+  }
+
+  if (issue.id.startsWith('records-missing-timeline:')) {
+    data.records = (data.records || []).map((record) => ({
+      ...record,
+      timeline: Array.isArray(record.timeline) && record.timeline.length > 0
+        ? record.timeline
+        : [{ status: record.status || appConfig.primaryStatus, at: today, by: '健康修复' }]
+    }));
+    persistStoreData(store.id, data);
+    return `已为${store.name}补齐timeline`;
+  }
+
+  if (issue.id.startsWith('records-missing-notes:')) {
+    data.records = (data.records || []).map((record) => ({
+      ...record,
+      notes: Array.isArray(record.notes) ? record.notes : []
+    }));
+    persistStoreData(store.id, data);
+    return `已为${store.name}补齐notes`;
+  }
+
+  if (issue.id.startsWith('store-schema-old:')) {
+    persistStoreData(store.id, { ...data, schemaVersion: STORE_SCHEMA_VERSION });
+    return `已更新${store.name}的Schema版本`;
+  }
+
+  const baseStore = meta?.stores?.[0];
+  const baseData = baseStore ? loadStoreData(baseStore.id) : null;
+  if (!baseData) return '缺少基准门店数据，已跳过';
+
+  if (issue.id.startsWith('templates-out-of-sync:')) {
+    persistStoreData(store.id, { ...data, templates: (baseData.templates || []).map((item) => ({ ...item })) });
+    return `已同步${store.name}的模板`;
+  }
+
+  if (issue.id.startsWith('rules-out-of-sync:')) {
+    persistStoreData(store.id, {
+      ...data,
+      rules: (baseData.rules || []).map((rule) => ({
+        ...rule,
+        overdueLevels: (rule.overdueLevels || []).map((level) => ({ ...level }))
+      }))
+    });
+    return `已同步${store.name}的规则`;
+  }
+
+  return '未识别修复项，已跳过';
+}
+
 function loadRecords() {
   const raw = localStorage.getItem(appConfig.storage);
   if (raw) {
@@ -880,6 +1175,9 @@ function App() {
   const [storeImportFile, setStoreImportFile] = useState(null);
   const storeImportFileRef = useRef(null);
   const [storeImportTargetId, setStoreImportTargetId] = useState('');
+  const [healthIssues, setHealthIssues] = useState([]);
+  const [healthHasScanned, setHealthHasScanned] = useState(false);
+  const [healthFixSummary, setHealthFixSummary] = useState([]);
 
   const currentStore = useMemo(() => {
     return stores.find(s => s.id === currentStoreId) || stores[0] || null;
@@ -902,7 +1200,6 @@ function App() {
 
   function persist(next) {
     setRecords(next);
-    localStorage.setItem(appConfig.storage, JSON.stringify(next));
     const currentData = loadStoreData(currentStoreId) || createDefaultStoreData();
     persistStoreData(currentStoreId, { ...currentData, records: next });
   }
@@ -935,6 +1232,50 @@ function App() {
   function handleUpdateOwnerInfo(phone, info) {
     const next = { ...ownerInfo, [phone]: { ...(ownerInfo[phone] || {}), ...info } };
     saveOwnerInfo(next);
+  }
+
+  function refreshCurrentStoreState() {
+    const meta = loadStoresMeta();
+    if (meta?.stores) setStores(meta.stores);
+    const nextStoreId = meta?.currentStoreId || currentStoreId;
+    const data = loadStoreData(nextStoreId);
+    if (data) {
+      setCurrentStoreId(nextStoreId);
+      setRecords(data.records || []);
+      setTemplates(data.templates || [...defaultTemplates]);
+      setRules(data.rules || defaultRules.map(r => ({ ...r })));
+      setFilters(data.filters || { query: '', status: '全部' });
+      setGroupMode(data.groupMode || 'auto');
+      setOwnerInfo(data.ownerInfo || {});
+    }
+  }
+
+  function runHealthScan() {
+    const issues = detectDataHealthIssues();
+    setHealthIssues(issues);
+    setHealthHasScanned(true);
+    return issues;
+  }
+
+  function handleExportHealthBackup() {
+    exportFullHealthBackup();
+  }
+
+  function handleFixHealthIssues() {
+    const targets = healthIssues.filter((issue) => issue.fixable);
+    if (targets.length === 0) return;
+    exportFullHealthBackup();
+    const summary = targets.map((issue) => {
+      try {
+        return { id: issue.id, title: issue.title, status: 'success', message: applyHealthFix(issue) };
+      } catch (error) {
+        return { id: issue.id, title: issue.title, status: 'failed', message: error instanceof Error ? error.message : '修复失败' };
+      }
+    });
+    refreshCurrentStoreState();
+    setHealthFixSummary(summary);
+    setHealthIssues(detectDataHealthIssues());
+    setHealthHasScanned(true);
   }
 
   function handleSwitchStore(storeId) {
@@ -1167,11 +1508,6 @@ function App() {
   function cancelEditTemplate() {
     setEditingTemplate(null);
     setTemplateForm({ species: '', vaccine: '', days: '' });
-  }
-
-  function saveRules(next) {
-    setRules(next);
-    persistRules(next);
   }
 
   function addRule(e) {
@@ -1669,12 +2005,24 @@ function App() {
 
   function exportToJSON() {
     const exportData = {
-      version: 1,
+      version: BACKUP_FORMAT_VERSION,
       exportedAt: new Date().toISOString(),
       appId: appConfig.id,
       storageKey: appConfig.storage,
+      storeName: currentStore?.name || '默认门店',
+      storeId: currentStoreId,
       recordCount: records.length,
-      records: records
+      templateCount: templates.length,
+      ruleCount: rules.length,
+      records: records,
+      templates: templates.map((item) => ({ ...item })),
+      rules: rules.map((rule) => ({
+        ...rule,
+        overdueLevels: (rule.overdueLevels || []).map((level) => ({ ...level }))
+      })),
+      filters,
+      groupMode,
+      ownerInfo
     };
     const jsonStr = JSON.stringify(exportData, null, 2);
     const blob = new Blob([jsonStr], { type: 'application/json' });
@@ -1682,7 +2030,7 @@ function App() {
     const link = document.createElement('a');
     link.href = url;
     const dateStr = formatLocalDate(new Date());
-    link.download = `宠物疫苗提醒数据_${dateStr}.json`;
+    link.download = `宠物疫苗提醒数据_${currentStore?.name || '默认门店'}_${dateStr}.json`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -1711,7 +2059,21 @@ function App() {
     return `${prefix}\n\n📋 正确格式示例：\n${EXPECTED_FORMAT_SAMPLE}`;
   }
 
-  function buildValidationResult({ valid = true, errors = [], warnings = [], validRecords = [], invalidRecords = [], allWarnings = [], migratedCount = 0, totalRecords = 0 }) {
+  function buildValidationResult({
+    valid = true,
+    errors = [],
+    warnings = [],
+    validRecords = [],
+    invalidRecords = [],
+    allWarnings = [],
+    migratedCount = 0,
+    totalRecords = 0,
+    templates: backupTemplates = null,
+    rules: backupRules = null,
+    filters: backupFilters = null,
+    groupMode: backupGroupMode = null,
+    ownerInfo: backupOwnerInfo = null
+  }) {
     return {
       valid,
       errors: [...errors],
@@ -1722,7 +2084,12 @@ function App() {
       migratedCount,
       totalRecords: totalRecords || validRecords.length + invalidRecords.length,
       validCount: validRecords.length,
-      invalidCount: invalidRecords.length
+      invalidCount: invalidRecords.length,
+      templates: backupTemplates,
+      rules: backupRules,
+      filters: backupFilters,
+      groupMode: backupGroupMode,
+      ownerInfo: backupOwnerInfo
     };
   }
 
@@ -1927,12 +2294,29 @@ function App() {
       errors.push(`⚠️ ${invalidRecords.length} 条记录存在错误，将被跳过（可查看下方详细列表）`);
     }
 
+    const hasFatalErrors = errors.some(e => !e.includes('条记录存在错误'));
+    const backupTemplates = Array.isArray(data.templates) ? data.templates.map((item) => ({ ...item })) : null;
+    const backupRules = Array.isArray(data.rules)
+      ? data.rules.map((rule) => ({
+        ...rule,
+        overdueLevels: (rule.overdueLevels || []).map((level) => ({ ...level }))
+      }))
+      : null;
+    const backupFilters = data.filters && typeof data.filters === 'object' ? data.filters : null;
+    const backupGroupMode = data.groupMode || null;
+    const backupOwnerInfo = data.ownerInfo && typeof data.ownerInfo === 'object' ? data.ownerInfo : null;
+
+    if (data.templates !== undefined && !Array.isArray(data.templates)) {
+      warnings.push('⚠️ 备份中的templates不是数组，已跳过模板恢复');
+    }
+    if (data.rules !== undefined && !Array.isArray(data.rules)) {
+      warnings.push('⚠️ 备份中的rules不是数组，已跳过规则恢复');
+    }
+
     const allWarningsList = [
       ...warnings,
       ...validatedWithWarnings.flatMap((v, i) => v.warnings.map(w => `记录${i + 1}：${w}`))
     ];
-
-    const hasFatalErrors = errors.some(e => !e.includes('条记录存在错误'));
 
     return buildValidationResult({
       valid: !hasFatalErrors,
@@ -1942,7 +2326,12 @@ function App() {
       invalidRecords,
       allWarnings: allWarningsList,
       migratedCount,
-      totalRecords: recordsToProcess.length
+      totalRecords: recordsToProcess.length,
+      templates: backupTemplates,
+      rules: backupRules,
+      filters: backupFilters,
+      groupMode: backupGroupMode,
+      ownerInfo: backupOwnerInfo
     });
   }
 
@@ -2047,6 +2436,10 @@ function App() {
           fileSize: (file.size / 1024).toFixed(2),
           exportedAt: data.exportedAt || null,
           version: data.version || 0,
+          storeName: data.storeName || null,
+          recordCount: data.recordCount ?? validation.totalRecords,
+          templateCount: validation.templates?.length || 0,
+          ruleCount: validation.rules?.length || 0,
           validation,
           changes
         });
@@ -2086,7 +2479,7 @@ function App() {
   function confirmRestore() {
     if (!restorePreview) return;
 
-    const { changes } = restorePreview;
+    const { changes, validation } = restorePreview;
     const mergedRecords = [...records];
 
     changes.overwriteRecords.forEach(({ newRecord }) => {
@@ -2100,9 +2493,43 @@ function App() {
       mergedRecords.unshift(newRecord);
     });
 
-    persist(mergedRecords);
+    const nextTemplates = Array.isArray(validation.templates) ? validation.templates : templates;
+    const nextRules = Array.isArray(validation.rules) ? validation.rules : rules;
+    const nextFilters = validation.filters ? { query: '', status: '全部', ...validation.filters } : filters;
+    const nextGroupMode = validation.groupMode || groupMode;
+    const nextOwnerInfo = validation.ownerInfo ? { ...validation.ownerInfo } : ownerInfo;
+
+    setRecords(mergedRecords);
+    setTemplates(nextTemplates);
+    setRules(nextRules);
+    setFilters(nextFilters);
+    setGroupMode(nextGroupMode);
+    setOwnerInfo(nextOwnerInfo);
+
+    const currentData = loadStoreData(currentStoreId) || createDefaultStoreData();
+    persistStoreData(currentStoreId, {
+      ...currentData,
+      records: mergedRecords,
+      templates: nextTemplates,
+      rules: nextRules,
+      filters: nextFilters,
+      groupMode: nextGroupMode,
+      ownerInfo: nextOwnerInfo
+    });
+
+    persistTemplates(nextTemplates);
+    persistRules(nextRules);
+
+    const configSummary = [
+      Array.isArray(validation.templates) ? `模板 ${validation.templates.length} 个` : null,
+      Array.isArray(validation.rules) ? `规则 ${validation.rules.length} 条` : null,
+      validation.filters ? '筛选配置' : null,
+      validation.groupMode ? '分组模式' : null,
+      validation.ownerInfo ? '主人备注' : null
+    ].filter(Boolean);
+
     cancelRestore();
-    alert(`恢复完成：\n新增 ${changes.addCount} 条\n覆盖 ${changes.overwriteCount} 条\n跳过 ${changes.skipCount} 条`);
+    alert(`恢复完成：\n新增 ${changes.addCount} 条\n覆盖 ${changes.overwriteCount} 条\n跳过 ${changes.skipCount} 条${configSummary.length ? `\n恢复模块：${configSummary.join('、')}` : ''}`);
   }
 
   function cancelRestore() {
@@ -2491,6 +2918,19 @@ function App() {
           <Zap size={16} />
           提醒规则引擎
         </button>
+        <button
+          className={`view-tab ${currentView === 'health' ? 'active' : ''}`}
+          onClick={() => {
+            setCurrentView('health');
+            setSelected(null);
+            setSelectedOwner(null);
+            setSelectedCalendarDay(null);
+            runHealthScan();
+          }}
+        >
+          <ShieldCheck size={16} />
+          数据健康检查
+        </button>
       </div>
 
       <section className="metrics">
@@ -2536,6 +2976,21 @@ function App() {
             <article className="metric">
               <span>逾期分级总数</span>
               <strong>{rules.reduce((sum, r) => sum + (r.overdueLevels || []).length, 0)}</strong>
+            </article>
+          </>
+        ) : currentView === 'health' ? (
+          <>
+            <article className="metric">
+              <span>风险项</span>
+              <strong>{healthIssues.length}</strong>
+            </article>
+            <article className="metric">
+              <span>高风险</span>
+              <strong>{healthIssues.filter((issue) => issue.severity === 'critical').length}</strong>
+            </article>
+            <article className="metric">
+              <span>已修复</span>
+              <strong>{healthFixSummary.filter((item) => item.status === 'success').length}</strong>
             </article>
           </>
         ) : (
@@ -3232,6 +3687,85 @@ function App() {
         </section>
       )}
 
+      {currentView === 'health' && (
+        <section className="health-section">
+          <div className="panel health-panel">
+            <div className="health-header">
+              <div className="panel-title">
+                <ShieldCheck size={18} />
+                <h2>离线数据健康检查与修复中心</h2>
+              </div>
+              <div className="health-toolbar">
+                <button type="button" className="btn-secondary" onClick={runHealthScan}>
+                  <Search size={16} />
+                  重新检查
+                </button>
+                <button type="button" className="btn-secondary" onClick={handleExportHealthBackup}>
+                  <Download size={16} />
+                  导出安全备份
+                </button>
+                <button type="button" className="primary" onClick={handleFixHealthIssues} disabled={!healthIssues.some((issue) => issue.fixable)}>
+                  <CheckCircle2 size={16} />
+                  修复可处理项
+                </button>
+              </div>
+            </div>
+
+            <div className="health-risk-strip">
+              <div>
+                <strong>修复前会自动导出完整本地快照。</strong>
+                <span>检查范围包含旧版单店数据、多门店元数据、门店数据结构、记录timeline/notes、模板与规则同步状态。</span>
+              </div>
+            </div>
+
+            {!healthHasScanned ? (
+              <div className="health-empty">
+                <ShieldCheck size={32} />
+                <p>点击检查后会读取浏览器本地存储，并列出风险说明与可执行修复项。</p>
+                <button type="button" className="primary" onClick={runHealthScan}>开始检查</button>
+              </div>
+            ) : healthIssues.length === 0 ? (
+              <div className="health-ok">
+                <CheckCircle2 size={28} />
+                <div>
+                  <strong>当前离线数据结构健康</strong>
+                  <span>未发现需要修复的旧数据、损坏数据或配置不同步项。</span>
+                </div>
+              </div>
+            ) : (
+              <div className="health-issue-list">
+                {healthIssues.map((issue) => (
+                  <article className={`health-issue-card severity-${issue.severity}`} key={issue.id}>
+                    <div className="health-issue-top">
+                      <span className="health-severity">{severityLabel(issue.severity)}</span>
+                      <strong>{issue.title}</strong>
+                      <span className="health-count">{issue.count} 项</span>
+                    </div>
+                    <p>{issue.risk}</p>
+                    <div className="health-action-row">
+                      <span>{issue.action}</span>
+                      {issue.samples?.length > 0 && <small>样例：{issue.samples.join('、')}</small>}
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+
+            {healthFixSummary.length > 0 && (
+              <div className="health-fix-summary">
+                <h3>修复摘要</h3>
+                {healthFixSummary.map((item) => (
+                  <div className={`health-fix-item ${item.status}`} key={item.id}>
+                    <span>{item.title}</span>
+                    <strong>{item.message}</strong>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+
       {currentView === 'calendar' && (
         <>
           <section className="panel calendar-toolbar-panel">
@@ -3896,9 +4430,12 @@ function App() {
                       <FileText size={32} />
                     </div>
                     <h3>导出数据</h3>
-                    <p>将当前所有宠物疫苗提醒数据导出为JSON备份文件，包含完整的记录、时间线和备注信息。</p>
-                    <div className="record-count-info">
-                      共 <strong>{records.length}</strong> 条记录将被导出
+                    <p>将当前门店数据导出为JSON备份文件，包含记录、时间线、备注、复种周期模板和提醒规则。</p>
+                    <div className="backup-count-grid">
+                      <span>门店<strong>{currentStore?.name || '默认门店'}</strong></span>
+                      <span>记录<strong>{records.length}</strong></span>
+                      <span>模板<strong>{templates.length}</strong></span>
+                      <span>规则<strong>{rules.length}</strong></span>
                     </div>
                     <button
                       type="button"
@@ -3918,10 +4455,10 @@ function App() {
                       <Upload size={32} />
                     </div>
                     <h3>恢复数据</h3>
-                    <p>选择之前导出的JSON备份文件恢复数据。恢复前将展示变更统计，确认后才会执行。</p>
+                    <p>选择之前导出的JSON备份文件恢复数据。恢复前将展示记录变更与模板规则模块，确认后才会执行。</p>
                     <p className="warning-text">
                       <AlertTriangle size={14} />
-                      注意：ID相同的记录将被覆盖，已存在相同宠物+疫苗的记录将被跳过
+                      注意：ID相同的记录将被覆盖，模板和规则会随备份同步恢复
                     </p>
                     <div
                       className="drop-zone"
@@ -3994,6 +4531,12 @@ function App() {
                       <span className="info-label">数据版本</span>
                       <span className="info-value">v{restorePreview.version}</span>
                     </div>
+                    {restorePreview.storeName && (
+                      <div className="info-item">
+                        <span className="info-label">来源门店</span>
+                        <span className="info-value">{restorePreview.storeName}</span>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -4061,6 +4604,27 @@ function App() {
                   </div>
                   <div className="summary-total">
                     有效记录：{restorePreview.changes.totalValid} 条 / 当前记录：{records.length} 条
+                  </div>
+                </div>
+
+                <div className="config-restore-summary">
+                  <h3><Settings size={16} />配置模块</h3>
+                  <div className="config-summary-grid">
+                    <div className={restorePreview.validation.templates ? 'config-summary-item active' : 'config-summary-item'}>
+                      <span>复种模板</span>
+                      <strong>{restorePreview.validation.templates?.length ?? templates.length}</strong>
+                      <small>{restorePreview.validation.templates ? '将随备份恢复' : '备份未包含，保持当前'}</small>
+                    </div>
+                    <div className={restorePreview.validation.rules ? 'config-summary-item active' : 'config-summary-item'}>
+                      <span>提醒规则</span>
+                      <strong>{restorePreview.validation.rules?.length ?? rules.length}</strong>
+                      <small>{restorePreview.validation.rules ? '将随备份恢复' : '备份未包含，保持当前'}</small>
+                    </div>
+                    <div className={restorePreview.validation.ownerInfo ? 'config-summary-item active' : 'config-summary-item'}>
+                      <span>主人备注</span>
+                      <strong>{restorePreview.validation.ownerInfo ? Object.keys(restorePreview.validation.ownerInfo).length : Object.keys(ownerInfo).length}</strong>
+                      <small>{restorePreview.validation.ownerInfo ? '将随备份恢复' : '备份未包含，保持当前'}</small>
+                    </div>
                   </div>
                 </div>
 
@@ -4167,7 +4731,15 @@ function App() {
                   type="button"
                   className="btn-primary"
                   onClick={confirmRestore}
-                  disabled={restorePreview.changes.addCount === 0 && restorePreview.changes.overwriteCount === 0}
+                  disabled={
+                    restorePreview.changes.addCount === 0 &&
+                    restorePreview.changes.overwriteCount === 0 &&
+                    !restorePreview.validation.templates &&
+                    !restorePreview.validation.rules &&
+                    !restorePreview.validation.filters &&
+                    !restorePreview.validation.groupMode &&
+                    !restorePreview.validation.ownerInfo
+                  }
                 >
                   <CheckCheck size={16} />
                   确认恢复（新增 {restorePreview.changes.addCount}，覆盖 {restorePreview.changes.overwriteCount}）
