@@ -1,5 +1,5 @@
-import { useMemo, useState, useRef, useEffect } from 'react';
-import { Syringe, Plus, Search, Trash2, RotateCcw, CheckCircle2, AlertTriangle, ClipboardList, CalendarDays, PhoneCall, Clock, AlertCircle, CalendarCheck, MessageSquareText, X, User, Calendar, Upload, FileText, AlertOctagon, CheckCheck, Info, Users, PawPrint, ArrowLeft, ChevronRight, Settings, Save, Edit3, Zap, Filter, PlusCircle, MinusCircle, Building2, Copy, Download, MoreHorizontal } from 'lucide-react';
+import { useMemo, useState, useRef, useEffect, useCallback } from 'react';
+import { Syringe, Plus, Search, Trash2, RotateCcw, CheckCircle2, AlertTriangle, ClipboardList, CalendarDays, PhoneCall, Clock, AlertCircle, CalendarCheck, MessageSquareText, X, User, Calendar, Upload, FileText, AlertOctagon, CheckCheck, Info, Users, PawPrint, ArrowLeft, ChevronRight, Settings, Save, Edit3, Zap, Filter, PlusCircle, MinusCircle, Building2, Copy, Download, MoreHorizontal, GitBranch, Link2, Link2Off, History, ShieldCheck, RefreshCw } from 'lucide-react';
 import './App.css';
 
 const appConfig = {
@@ -380,6 +380,282 @@ const STORES_META_KEY = appConfig.storage + '-stores-meta';
 const STORE_DATA_KEY_PREFIX = appConfig.storage + '-store-';
 const STORE_SCHEMA_VERSION = 1;
 const BACKUP_FORMAT_VERSION = 2;
+
+const CROSS_STORE_LINKS_KEY = appConfig.storage + '-cross-store-links';
+const CROSS_STORE_IGNORED_KEY = appConfig.storage + '-cross-store-ignored';
+const CROSS_STORE_AUDIT_KEY = appConfig.storage + '-cross-store-audit';
+
+function loadCrossStoreLinks() {
+  const raw = localStorage.getItem(CROSS_STORE_LINKS_KEY);
+  if (raw) {
+    try { return JSON.parse(raw); } catch { return {}; }
+  }
+  return {};
+}
+
+function persistCrossStoreLinks(links) {
+  localStorage.setItem(CROSS_STORE_LINKS_KEY, JSON.stringify(links));
+}
+
+function loadCrossStoreIgnored() {
+  const raw = localStorage.getItem(CROSS_STORE_IGNORED_KEY);
+  if (raw) {
+    try { return JSON.parse(raw); } catch { return []; }
+  }
+  return [];
+}
+
+function persistCrossStoreIgnored(ignored) {
+  localStorage.setItem(CROSS_STORE_IGNORED_KEY, JSON.stringify(ignored));
+}
+
+function loadCrossStoreAudit() {
+  const raw = localStorage.getItem(CROSS_STORE_AUDIT_KEY);
+  if (raw) {
+    try { return JSON.parse(raw); } catch { return []; }
+  }
+  return [];
+}
+
+function persistCrossStoreAudit(audit) {
+  localStorage.setItem(CROSS_STORE_AUDIT_KEY, JSON.stringify(audit));
+}
+
+function addCrossStoreAuditLog(action, details) {
+  const audit = loadCrossStoreAudit();
+  audit.unshift({
+    id: uid(),
+    action,
+    details,
+    at: new Date().toISOString(),
+    by: '操作员'
+  });
+  persistCrossStoreAudit(audit.slice(0, 500));
+}
+
+function levenshteinDistance(a, b) {
+  if (!a || !b) return Math.max((a || '').length, (b || '').length);
+  const matrix = [];
+  for (let i = 0; i <= b.length; i++) {
+    matrix[i] = [i];
+  }
+  for (let j = 0; j <= a.length; j++) {
+    matrix[0][j] = j;
+  }
+  for (let i = 1; i <= b.length; i++) {
+    for (let j = 1; j <= a.length; j++) {
+      if (b.charAt(i - 1) === a.charAt(j - 1)) {
+        matrix[i][j] = matrix[i - 1][j - 1];
+      } else {
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j - 1] + 1,
+          matrix[i][j - 1] + 1,
+          matrix[i - 1][j] + 1
+        );
+      }
+    }
+  }
+  return matrix[b.length][a.length];
+}
+
+function stringSimilarity(a, b) {
+  if (!a && !b) return 1;
+  if (!a || !b) return 0;
+  const strA = String(a).toLowerCase().trim();
+  const strB = String(b).toLowerCase().trim();
+  if (strA === strB) return 1;
+  const maxLen = Math.max(strA.length, strB.length);
+  if (maxLen === 0) return 1;
+  const distance = levenshteinDistance(strA, strB);
+  return 1 - distance / maxLen;
+}
+
+function normalizePetName(name) {
+  if (!name) return '';
+  return String(name)
+    .toLowerCase()
+    .trim()
+    .replace(/[\s·・._-]/g, '');
+}
+
+function isPetNameSimilar(a, b, threshold = 0.75) {
+  const normA = normalizePetName(a);
+  const normB = normalizePetName(b);
+  if (!normA || !normB) return false;
+  if (normA === normB) return true;
+  if (normA.includes(normB) || normB.includes(normA)) return true;
+  return stringSimilarity(normA, normB) >= threshold;
+}
+
+function scanAllStoresForDuplicates(currentStoreId) {
+  const meta = loadStoresMeta();
+  if (!meta || !meta.stores || meta.stores.length < 2) {
+    return { groups: [], allRecords: [] };
+  }
+
+  const ignored = loadCrossStoreIgnored();
+  const ignoredKeys = new Set(ignored.map(item => item.groupKey));
+
+  const allRecords = [];
+  meta.stores.forEach(store => {
+    const storeData = loadStoreData(store.id);
+    if (storeData && Array.isArray(storeData.records)) {
+      storeData.records.forEach(record => {
+        allRecords.push({
+          ...record,
+          _storeId: store.id,
+          _storeName: store.name,
+          _isDefault: store.isDefault || false
+        });
+      });
+    }
+  });
+
+  const phoneGroups = {};
+  allRecords.forEach(record => {
+    const phone = normalizePhone(record.ownerPhone);
+    if (phone) {
+      if (!phoneGroups[phone]) phoneGroups[phone] = [];
+      phoneGroups[phone].push(record);
+    }
+  });
+
+  const duplicateGroups = [];
+
+  Object.entries(phoneGroups).forEach(([phone, records]) => {
+    const storeIds = new Set(records.map(r => r._storeId));
+    if (storeIds.size >= 2) {
+      const groupKey = `phone:${phone}`;
+      if (!ignoredKeys.has(groupKey)) {
+        duplicateGroups.push({
+          id: uid(),
+          key: groupKey,
+          type: 'phone',
+          matchValue: phone,
+          matchLabel: `手机号：${phone}`,
+          records,
+          storeIds: [...storeIds],
+          confidence: 1.0
+        });
+      }
+    }
+  });
+
+  const noPhoneRecords = allRecords.filter(r => !normalizePhone(r.ownerPhone));
+  for (let i = 0; i < noPhoneRecords.length; i++) {
+    for (let j = i + 1; j < noPhoneRecords.length; j++) {
+      const r1 = noPhoneRecords[i];
+      const r2 = noPhoneRecords[j];
+      if (r1._storeId === r2._storeId) continue;
+      if (r1.species && r2.species && r1.species !== r2.species) continue;
+      const similarity = stringSimilarity(normalizePetName(r1.pet), normalizePetName(r2.pet));
+      if (similarity >= 0.8) {
+        const groupKey = `pet:${[r1._storeId, r2._storeId].sort().join('-')}:${[r1.id, r2.id].sort().join('-')}`;
+        if (!ignoredKeys.has(groupKey)) {
+          const existingGroup = duplicateGroups.find(g =>
+            g.records.some(r => r.id === r1.id && r._storeId === r1._storeId) ||
+            g.records.some(r => r.id === r2.id && r._storeId === r2._storeId)
+          );
+          if (!existingGroup) {
+            duplicateGroups.push({
+              id: uid(),
+              key: groupKey,
+              type: 'pet',
+              matchValue: r1.pet,
+              matchLabel: `宠物名相似：${r1.pet} ≈ ${r2.pet}（相似度 ${Math.round(similarity * 100)}%）`,
+              records: [r1, r2],
+              storeIds: [r1._storeId, r2._storeId],
+              confidence: similarity
+            });
+          }
+        }
+      }
+    }
+  }
+
+  duplicateGroups.sort((a, b) => {
+    if (a.type !== b.type) return a.type === 'phone' ? -1 : 1;
+    return b.records.length - a.records.length;
+  });
+
+  return { groups: duplicateGroups, allRecords };
+}
+
+function markAsCrossStoreCustomer(recordIdsWithStore, currentStoreId) {
+  const links = loadCrossStoreLinks();
+  const linkId = uid();
+  const now = new Date().toISOString();
+
+  links[linkId] = {
+    id: linkId,
+    records: recordIdsWithStore.map(({ storeId, recordId }) => ({ storeId, recordId })),
+    createdAt: now,
+    createdBy: '操作员'
+  };
+
+  persistCrossStoreLinks(links);
+  addCrossStoreAuditLog('mark_cross_store', {
+    linkId,
+    records: recordIdsWithStore,
+    fromStore: currentStoreId
+  });
+
+  return linkId;
+}
+
+function ignoreDuplicateGroup(groupKey, reason = '') {
+  const ignored = loadCrossStoreIgnored();
+  ignored.push({
+    groupKey,
+    reason,
+    at: new Date().toISOString(),
+    by: '操作员'
+  });
+  persistCrossStoreIgnored(ignored);
+  addCrossStoreAuditLog('ignore_duplicate', { groupKey, reason });
+}
+
+function copyRecordToStore(sourceStoreId, sourceRecordId, targetStoreId) {
+  const sourceData = loadStoreData(sourceStoreId);
+  if (!sourceData || !sourceData.records) return null;
+
+  const sourceRecord = sourceData.records.find(r => r.id === sourceRecordId);
+  if (!sourceRecord) return null;
+
+  const targetData = loadStoreData(targetStoreId) || createDefaultStoreData();
+  const newStatus = getDefaultStatusForVaccine(sourceRecord.vaccine, targetData.rules || defaultRules);
+  const copiedRecord = {
+    ...sourceRecord,
+    id: uid(),
+    status: newStatus,
+    timeline: [
+      ...(sourceRecord.timeline || []),
+      { status: newStatus, at: today, by: `从${sourceStoreId}复制`, note: `跨门店复制，原记录ID: ${sourceRecordId}` }
+    ],
+    notes: [
+      ...(sourceRecord.notes || []),
+      { id: uid(), content: `从门店复制，原门店ID: ${sourceStoreId}, 原记录ID: ${sourceRecordId}`, at: today, by: '系统' }
+    ],
+    schemaVersion: SCHEMA_VERSION,
+    _crossStoreSource: {
+      storeId: sourceStoreId,
+      recordId: sourceRecordId,
+      copiedAt: new Date().toISOString()
+    }
+  };
+
+  targetData.records = [copiedRecord, ...(targetData.records || [])];
+  persistStoreData(targetStoreId, targetData);
+
+  addCrossStoreAuditLog('copy_record', {
+    sourceStoreId,
+    sourceRecordId,
+    targetStoreId,
+    newRecordId: copiedRecord.id
+  });
+
+  return copiedRecord;
+}
 
 function getStoreMetaStorageKey() {
   return STORES_META_KEY;
@@ -924,6 +1200,14 @@ function App() {
   const [draggingRecordId, setDraggingRecordId] = useState(null);
   const [dragOverDate, setDragOverDate] = useState(null);
   const justDraggedRef = useRef(false);
+  const [crossStoreDuplicates, setCrossStoreDuplicates] = useState({ groups: [], allRecords: [] });
+  const [crossStoreLinks, setCrossStoreLinks] = useState(() => loadCrossStoreLinks());
+  const [crossStoreAudit, setCrossStoreAudit] = useState(() => loadCrossStoreAudit());
+  const [selectedDuplicateGroup, setSelectedDuplicateGroup] = useState(null);
+  const [crossStoreTab, setCrossStoreTab] = useState('duplicates');
+  const [copySelectedIds, setCopySelectedIds] = useState(new Set());
+  const [linkSelectedIds, setLinkSelectedIds] = useState(new Set());
+  const [isScanningDuplicates, setIsScanningDuplicates] = useState(false);
 
   const currentStore = useMemo(() => {
     return stores.find(s => s.id === currentStoreId) || stores[0] || null;
@@ -1076,6 +1360,94 @@ function App() {
         }
       }
     }
+  }
+
+  function handleScanCrossStoreDuplicates() {
+    setIsScanningDuplicates(true);
+    setTimeout(() => {
+      const result = scanAllStoresForDuplicates(currentStoreId);
+      setCrossStoreDuplicates(result);
+      setIsScanningDuplicates(false);
+    }, 100);
+  }
+
+  function handleIgnoreDuplicateGroup(groupKey) {
+    if (!confirm('确定要忽略此重复分组吗？后续扫描将不再提示。')) return;
+    ignoreDuplicateGroup(groupKey);
+    handleScanCrossStoreDuplicates();
+    setCrossStoreAudit(loadCrossStoreAudit());
+    setSelectedDuplicateGroup(null);
+  }
+
+  function handleMarkAsCrossStore(group) {
+    if (linkSelectedIds.size < 2) {
+      alert('请至少选择两条记录进行关联');
+      return;
+    }
+    const recordsToLink = group.records.filter(r =>
+      linkSelectedIds.has(`${r._storeId}:${r.id}`)
+    ).map(r => ({ storeId: r._storeId, recordId: r.id }));
+
+    markAsCrossStoreCustomer(recordsToLink, currentStoreId);
+    setCrossStoreLinks(loadCrossStoreLinks());
+    setCrossStoreAudit(loadCrossStoreAudit());
+    setLinkSelectedIds(new Set());
+    alert('已成功标记为跨店客户');
+  }
+
+  function handleCopyRecordsToCurrentStore(group) {
+    if (copySelectedIds.size === 0) {
+      alert('请先选择要复制的记录');
+      return;
+    }
+    const recordsToCopy = group.records.filter(r =>
+      copySelectedIds.has(`${r._storeId}:${r.id}`) && r._storeId !== currentStoreId
+    );
+
+    if (recordsToCopy.length === 0) {
+      alert('请选择其他门店的记录进行复制');
+      return;
+    }
+
+    if (!confirm(`确定要将 ${recordsToCopy.length} 条记录复制到当前门店"${currentStore?.name}"吗？原门店数据将保留。`)) return;
+
+    let copiedCount = 0;
+    recordsToCopy.forEach(r => {
+      const copied = copyRecordToStore(r._storeId, r.id, currentStoreId);
+      if (copied) copiedCount++;
+    });
+
+    if (copiedCount > 0) {
+      const currentData = loadStoreData(currentStoreId);
+      if (currentData) {
+        setRecords(currentData.records || []);
+      }
+      setCrossStoreAudit(loadCrossStoreAudit());
+      setCopySelectedIds(new Set());
+      alert(`成功复制 ${copiedCount} 条记录到当前门店`);
+    }
+  }
+
+  function toggleCopySelection(storeId, recordId) {
+    const key = `${storeId}:${recordId}`;
+    const next = new Set(copySelectedIds);
+    if (next.has(key)) {
+      next.delete(key);
+    } else {
+      next.add(key);
+    }
+    setCopySelectedIds(next);
+  }
+
+  function toggleLinkSelection(storeId, recordId) {
+    const key = `${storeId}:${recordId}`;
+    const next = new Set(linkSelectedIds);
+    if (next.has(key)) {
+      next.delete(key);
+    } else {
+      next.add(key);
+    }
+    setLinkSelectedIds(next);
   }
 
   function handleExportStore(storeId, storeName) {
@@ -3008,6 +3380,21 @@ function App() {
           <Zap size={16} />
           提醒规则引擎
         </button>
+        <button
+          className={`view-tab ${currentView === 'crossStore' ? 'active' : ''}`}
+          onClick={() => {
+            setCurrentView('crossStore');
+            setSelected(null);
+            setSelectedOwner(null);
+            setSelectedCalendarDay(null);
+            if (crossStoreDuplicates.groups.length === 0) {
+              handleScanCrossStoreDuplicates();
+            }
+          }}
+        >
+          <GitBranch size={16} />
+          跨店客户
+        </button>
       </div>
 
       <section className="metrics">
@@ -3052,6 +3439,25 @@ function App() {
             <article className="metric">
               <span>逾期分级总数</span>
               <strong>{rules.reduce((sum, r) => sum + (r.overdueLevels || []).length, 0)}</strong>
+            </article>
+          </>
+        ) : currentView === 'crossStore' ? (
+          <>
+            <article className="metric">
+              <span>疑似重复分组</span>
+              <strong>{crossStoreDuplicates.groups.length}</strong>
+            </article>
+            <article className="metric">
+              <span>涉及记录数</span>
+              <strong>{crossStoreDuplicates.groups.reduce((sum, g) => sum + g.records.length, 0)}</strong>
+            </article>
+            <article className="metric">
+              <span>已标记跨店客户</span>
+              <strong>{Object.keys(crossStoreLinks).length}</strong>
+            </article>
+            <article className="metric">
+              <span>操作记录</span>
+              <strong>{crossStoreAudit.length}</strong>
             </article>
           </>
         ) : (
@@ -3925,6 +4331,293 @@ function App() {
               </div>
             </div>
           </div>
+        </section>
+      )}
+
+      {currentView === 'crossStore' && (
+        <section className="panel cross-store-panel">
+          <div className="panel-title">
+            <GitBranch size={18} />
+            <h2>跨店客户管理</h2>
+            <div className="panel-actions">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={handleScanCrossStoreDuplicates}
+                disabled={isScanningDuplicates}
+              >
+                <RefreshCw size={14} className={isScanningDuplicates ? 'spin' : ''} />
+                {isScanningDuplicates ? '扫描中...' : '重新扫描'}
+              </button>
+            </div>
+          </div>
+
+          <div className="cross-store-tabs">
+            <button
+              className={`cross-store-tab ${crossStoreTab === 'duplicates' ? 'active' : ''}`}
+              onClick={() => setCrossStoreTab('duplicates')}
+            >
+              <AlertTriangle size={14} />
+              疑似重复客户
+            </button>
+            <button
+              className={`cross-store-tab ${crossStoreTab === 'linked' ? 'active' : ''}`}
+              onClick={() => setCrossStoreTab('linked')}
+            >
+              <Link2 size={14} />
+              已标记跨店客户
+            </button>
+            <button
+              className={`cross-store-tab ${crossStoreTab === 'audit' ? 'active' : ''}`}
+              onClick={() => setCrossStoreTab('audit')}
+            >
+              <History size={14} />
+              操作审计日志
+            </button>
+          </div>
+
+          {crossStoreTab === 'duplicates' && (
+            <div className="cross-store-content">
+              {stores.length < 2 ? (
+                <div className="empty-state">
+                  <Building2 size={48} className="empty-icon" />
+                  <p>请先创建多个门店后再使用跨店客户识别功能</p>
+                </div>
+              ) : crossStoreDuplicates.groups.length === 0 ? (
+                <div className="empty-state">
+                  <CheckCircle2 size={48} className="success-icon" />
+                  <p>{isScanningDuplicates ? '正在扫描所有门店数据...' : '未发现跨门店重复客户'}</p>
+                  {!isScanningDuplicates && (
+                    <button type="button" className="btn-primary" onClick={handleScanCrossStoreDuplicates}>
+                      <RefreshCw size={14} />
+                      立即扫描
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <div className="duplicate-groups">
+                  {crossStoreDuplicates.groups.map((group) => (
+                    <article key={group.id} className={`duplicate-group ${selectedDuplicateGroup?.id === group.id ? 'expanded' : ''}`}>
+                      <div className="duplicate-group-header" onClick={() => {
+                        if (selectedDuplicateGroup?.id === group.id) {
+                          setSelectedDuplicateGroup(null);
+                          setCopySelectedIds(new Set());
+                          setLinkSelectedIds(new Set());
+                        } else {
+                          setSelectedDuplicateGroup(group);
+                          setCopySelectedIds(new Set());
+                          setLinkSelectedIds(new Set());
+                        }
+                      }}>
+                        <div className="duplicate-group-info">
+                          <div className={`duplicate-type-badge ${group.type}`}>
+                            {group.type === 'phone' ? '手机号匹配' : '宠物名相似'}
+                          </div>
+                          <span className="duplicate-match-label">{group.matchLabel}</span>
+                          <span className="duplicate-record-count">
+                            {group.records.length} 条记录 · {group.storeIds.length} 个门店
+                          </span>
+                          {group.confidence < 1 && (
+                            <span className="duplicate-confidence">
+                              置信度 {Math.round(group.confidence * 100)}%
+                            </span>
+                          )}
+                        </div>
+                        <ChevronRight size={18} className={`chevron ${selectedDuplicateGroup?.id === group.id ? 'rotated' : ''}`} />
+                      </div>
+
+                      {selectedDuplicateGroup?.id === group.id && (
+                        <div className="duplicate-group-detail">
+                          <div className="duplicate-actions-bar">
+                            <button
+                              type="button"
+                              className="btn-secondary ghost-danger"
+                              onClick={() => handleIgnoreDuplicateGroup(group.key)}
+                            >
+                              <Link2Off size={14} />
+                              忽略此分组
+                            </button>
+                            <button
+                              type="button"
+                              className="btn-secondary"
+                              onClick={() => handleMarkAsCrossStore(group)}
+                              disabled={linkSelectedIds.size < 2}
+                            >
+                              <Link2 size={14} />
+                              标记为跨店客户 {linkSelectedIds.size > 0 && `(${linkSelectedIds.size})`}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn-primary"
+                              onClick={() => handleCopyRecordsToCurrentStore(group)}
+                              disabled={copySelectedIds.size === 0}
+                            >
+                              <Copy size={14} />
+                              复制到当前门店 {copySelectedIds.size > 0 && `(${copySelectedIds.size})`}
+                            </button>
+                          </div>
+
+                          <div className="duplicate-records-list">
+                            {group.records.map((record) => {
+                              const recordKey = `${record._storeId}:${record.id}`;
+                              const isCurrentStore = record._storeId === currentStoreId;
+                              return (
+                                <div key={recordKey} className={`duplicate-record-card ${isCurrentStore ? 'current-store' : ''}`}>
+                                  <div className="duplicate-record-header">
+                                    <label className="record-checkbox">
+                                      <input
+                                        type="checkbox"
+                                        checked={copySelectedIds.has(recordKey)}
+                                        onChange={() => toggleCopySelection(record._storeId, record.id)}
+                                      />
+                                      <span className="checkbox-label">复制</span>
+                                    </label>
+                                    <label className="record-checkbox">
+                                      <input
+                                        type="checkbox"
+                                        checked={linkSelectedIds.has(recordKey)}
+                                        onChange={() => toggleLinkSelection(record._storeId, record.id)}
+                                      />
+                                      <span className="checkbox-label">关联</span>
+                                    </label>
+                                    <div className="record-store-tag">
+                                      <Building2 size={12} />
+                                      {record._storeName}
+                                      {isCurrentStore && <span className="current-badge">当前门店</span>}
+                                    </div>
+                                  </div>
+                                  <div className="duplicate-record-body">
+                                    <div className="record-main-info">
+                                      <PawPrint size={16} className="record-icon" />
+                                      <strong className="record-pet-name">{record.pet}</strong>
+                                      <span className="record-species">{record.species}</span>
+                                      <span className="record-vaccine">{record.vaccine}</span>
+                                    </div>
+                                    <div className="record-sub-info">
+                                      <span><PhoneCall size={12} /> {record.ownerPhone || '无联系方式'}</span>
+                                      <span><Calendar size={12} /> 下次提醒：{record.nextDate || '未设置'}</span>
+                                      <span className={`record-status status-${appConfig.statuses.indexOf(record.status)}`}>
+                                        {record.status}
+                                      </span>
+                                    </div>
+                                    {record._crossStoreSource && (
+                                      <div className="record-source-tag">
+                                        <ShieldCheck size={12} />
+                                        从其他门店复制而来
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+
+                          <div className="duplicate-group-footer">
+                            <p className="hint-text">
+                              <Info size={12} />
+                              提示："复制"会在当前门店创建新记录，原门店数据保持不变；"标记为跨店客户"仅建立关联标识，不修改原始数据。
+                            </p>
+                          </div>
+                        </div>
+                      )}
+                    </article>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {crossStoreTab === 'linked' && (
+            <div className="cross-store-content">
+              {Object.keys(crossStoreLinks).length === 0 ? (
+                <div className="empty-state">
+                  <Link2 size={48} className="empty-icon" />
+                  <p>暂无已标记的跨店客户</p>
+                </div>
+              ) : (
+                <div className="linked-customers-list">
+                  {Object.values(crossStoreLinks).map((link) => (
+                    <article key={link.id} className="linked-customer-card">
+                      <div className="linked-customer-header">
+                        <Link2 size={16} />
+                        <span className="linked-id">关联ID: {link.id}</span>
+                        <span className="linked-date">
+                          创建于 {new Date(link.createdAt).toLocaleString('zh-CN')}
+                        </span>
+                      </div>
+                      <div className="linked-customer-records">
+                        {link.records.map((linked, idx) => {
+                          const store = stores.find(s => s.id === linked.storeId);
+                          const storeData = loadStoreData(linked.storeId);
+                          const record = storeData?.records?.find(r => r.id === linked.recordId);
+                          return (
+                            <div key={idx} className={`linked-record-item ${linked.storeId === currentStoreId ? 'current-store' : ''}`}>
+                              <Building2 size={12} />
+                              <span className="linked-store-name">{store?.name || linked.storeId}</span>
+                              {record && (
+                                <>
+                                  <span className="linked-pet-name">{record.pet}</span>
+                                  <span className="linked-phone">{record.ownerPhone}</span>
+                                </>
+                              )}
+                              {linked.storeId === currentStoreId && (
+                                <span className="current-badge">当前门店</span>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {crossStoreTab === 'audit' && (
+            <div className="cross-store-content">
+              {crossStoreAudit.length === 0 ? (
+                <div className="empty-state">
+                  <History size={48} className="empty-icon" />
+                  <p>暂无操作记录</p>
+                </div>
+              ) : (
+                <div className="audit-log-list">
+                  {crossStoreAudit.map((log) => (
+                    <article key={log.id} className="audit-log-item">
+                      <div className="audit-log-header">
+                        <History size={14} />
+                        <span className="audit-action">
+                          {log.action === 'ignore_duplicate' && '忽略重复分组'}
+                          {log.action === 'mark_cross_store' && '标记为跨店客户'}
+                          {log.action === 'copy_record' && '复制记录到门店'}
+                        </span>
+                        <span className="audit-time">{new Date(log.at).toLocaleString('zh-CN')}</span>
+                        <span className="audit-operator">{log.by}</span>
+                      </div>
+                      <div className="audit-log-details">
+                        {log.action === 'ignore_duplicate' && (
+                          <span>分组Key: {log.details.groupKey} {log.details.reason && `（原因: ${log.details.reason}）`}</span>
+                        )}
+                        {log.action === 'mark_cross_store' && (
+                          <span>
+                            关联ID: {log.details.linkId}，
+                            涉及记录数: {log.details.records?.length || 0}
+                          </span>
+                        )}
+                        {log.action === 'copy_record' && (
+                          <span>
+                            从 {log.details.sourceStoreId} 复制到 {log.details.targetStoreId}，
+                            新记录ID: {log.details.newRecordId}
+                          </span>
+                        )}
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </section>
       )}
 
