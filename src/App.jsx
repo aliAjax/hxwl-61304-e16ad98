@@ -1516,6 +1516,12 @@ function App() {
     } : item);
     persist(next);
     if (selected?.id === id) setSelected(next.find((item) => item.id === id));
+    setSelectedContactIds((prev) => {
+      if (!prev.has(id)) return prev;
+      const nextSet = new Set(prev);
+      nextSet.delete(id);
+      return nextSet;
+    });
   }
 
   function batchUpdateStatus(ids, status, operator = '批量操作') {
