@@ -921,6 +921,9 @@ function App() {
   const [selectedContactIds, setSelectedContactIds] = useState(new Set());
   const [showBatchContactModal, setShowBatchContactModal] = useState(false);
   const [batchContactOperator, setBatchContactOperator] = useState('');
+  const [draggingRecordId, setDraggingRecordId] = useState(null);
+  const [dragOverDate, setDragOverDate] = useState(null);
+  const justDraggedRef = useRef(false);
 
   const currentStore = useMemo(() => {
     return stores.find(s => s.id === currentStoreId) || stores[0] || null;
@@ -1498,6 +1501,18 @@ function App() {
       ...item,
       status,
       timeline: [...(item.timeline || []), { status, at: today, by: '操作员' }]
+    } : item);
+    persist(next);
+    if (selected?.id === id) setSelected(next.find((item) => item.id === id));
+  }
+
+  function rescheduleRecord(id, newDate) {
+    const target = records.find((item) => item.id === id);
+    if (!target || target.nextDate === newDate) return;
+    const next = records.map((item) => item.id === id ? {
+      ...item,
+      nextDate: newDate,
+      timeline: [...(item.timeline || []), { status: item.status, at: today, by: '改期', note: `改期至 ${newDate}` }]
     } : item);
     persist(next);
     if (selected?.id === id) setSelected(next.find((item) => item.id === id));
@@ -3980,11 +3995,40 @@ function App() {
                   const hasUpcoming = stats.upcoming > 0;
                   const highestLevel = stats.highestOverdueLevel;
                   const overdueClass = highestLevel >= 2 ? 'overdue-severe' : highestLevel === 1 ? 'overdue-moderate' : highestLevel === 0 ? 'overdue-mild' : '';
+                  const isDragOver = dragOverDate === day.date;
                   return (
                     <div
                       key={day.date}
-                      className={`calendar-day ${!day.isCurrentMonth ? 'other-month' : ''} ${isToday ? 'is-today' : ''} ${isSelected ? 'is-selected' : ''} ${dayIsOverdue ? 'is-overdue ' + overdueClass : ''} ${hasUpcoming ? 'has-upcoming' : ''} ${stats.total > 0 ? 'has-records' : ''}`}
-                      onClick={() => stats.total > 0 ? setSelectedCalendarDay(day.date) : null}
+                      className={`calendar-day ${!day.isCurrentMonth ? 'other-month' : ''} ${isToday ? 'is-today' : ''} ${isSelected ? 'is-selected' : ''} ${dayIsOverdue ? 'is-overdue ' + overdueClass : ''} ${hasUpcoming ? 'has-upcoming' : ''} ${stats.total > 0 ? 'has-records' : ''} ${isDragOver ? 'is-drag-over' : ''}`}
+                      onClick={() => {
+                        if (justDraggedRef.current) {
+                          justDraggedRef.current = false;
+                          return;
+                        }
+                        if (stats.total > 0) setSelectedCalendarDay(day.date);
+                      }}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = 'move';
+                      }}
+                      onDragEnter={(e) => {
+                        e.preventDefault();
+                        setDragOverDate(day.date);
+                      }}
+                      onDragLeave={(e) => {
+                        if (e.currentTarget.contains(e.relatedTarget)) return;
+                        if (dragOverDate === day.date) {
+                          setDragOverDate(null);
+                        }
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        const recordId = e.dataTransfer.getData('text/plain');
+                        if (recordId) {
+                          rescheduleRecord(recordId, day.date);
+                        }
+                        setDragOverDate(null);
+                      }}
                     >
                       <div className="calendar-day-header">
                         <span className="calendar-day-number">{day.day}</span>
@@ -4068,9 +4112,30 @@ function App() {
                   ) : (
                     getDayStats(selectedCalendarDay).items.map((item) => (
                       <article
-                        className={'day-record ' + (item.conflict || hasOverlap(item, records) ? 'conflict' : '')}
+                        className={'day-record ' + (item.conflict || hasOverlap(item, records) ? 'conflict' : '') + (draggingRecordId === item.id ? ' is-dragging' : '')}
                         key={item.id}
-                        onClick={() => { setSelected(item); setCurrentView('records'); }}
+                        draggable
+                        onDragStart={(e) => {
+                          setDraggingRecordId(item.id);
+                          e.dataTransfer.setData('text/plain', item.id);
+                          e.dataTransfer.effectAllowed = 'move';
+                        }}
+                        onDragEnd={() => {
+                          setDraggingRecordId(null);
+                          setDragOverDate(null);
+                          justDraggedRef.current = true;
+                          setTimeout(() => {
+                            justDraggedRef.current = false;
+                          }, 100);
+                        }}
+                        onClick={() => {
+                          if (justDraggedRef.current) {
+                            justDraggedRef.current = false;
+                            return;
+                          }
+                          setSelected(item);
+                          setCurrentView('records');
+                        }}
                       >
                         <div className="day-record-head">
                           <div>
