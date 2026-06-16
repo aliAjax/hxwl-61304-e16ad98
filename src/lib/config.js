@@ -17,6 +17,76 @@ const appConfig = {
     { key: 'lastDate', label: '上次接种日期', type: 'date', placeholder: '', options: [] },
     { key: 'nextDate', label: '下次提醒日期', type: 'date', placeholder: '', options: [] }
   ],
+  seed: [
+    {
+      pet: '奶盖',
+      species: '猫',
+      ownerPhone: '13800008888',
+      vaccine: '猫三联',
+      lastDate: '2026-05-15',
+      nextDate: '2026-06-14',
+      status: '待联系'
+    },
+    {
+      pet: '旺财',
+      species: '犬',
+      ownerPhone: '13900006666',
+      vaccine: '狂犬',
+      lastDate: '2025-06-10',
+      nextDate: '2026-06-10',
+      status: '已联系'
+    },
+    {
+      pet: '团子',
+      species: '兔',
+      ownerPhone: '13700001111',
+      vaccine: '体内驱虫',
+      lastDate: '2026-05-13',
+      nextDate: '2026-06-13',
+      status: '待联系'
+    },
+    {
+      pet: '小白',
+      species: '猫',
+      ownerPhone: '13600002222',
+      vaccine: '狂犬',
+      lastDate: '2026-05-20',
+      nextDate: '2026-06-18',
+      status: '待联系'
+    },
+    {
+      pet: '豆豆',
+      species: '犬',
+      ownerPhone: '13500003333',
+      vaccine: '犬六联',
+      lastDate: '2026-06-01',
+      nextDate: '2026-06-28',
+      status: '已接种'
+    }
+  ],
+  metrics: [
+    ['宠物数', 'records.length'],
+    ['待联系', "records.filter((item) => item.status === '待联系').length"],
+    ['本周提醒', 'records.filter((item) => inNextDays(item.nextDate, 7)).length']
+  ],
+  filters: [
+    {
+      key: 'query',
+      label: '宠物/主人',
+      type: 'search',
+      match: '`${item.pet}${item.ownerPhone}`.includes(filters.query)'
+    },
+    {
+      key: 'status',
+      label: '提醒状态',
+      type: 'status'
+    }
+  ],
+  cardTitle: 'item.pet',
+  cardMeta: '`${item.species} · ${item.vaccine} · ${item.ownerPhone}`',
+  cardDetail: '`下次提醒：${item.nextDate}`',
+  dateKey: 'nextDate',
+  note: '先做单店本地版，不需要短信接口。',
   defaultValues: {
     pet: '奶盖',
     species: '猫',
