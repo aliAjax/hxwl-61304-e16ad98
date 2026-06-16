@@ -8,10 +8,9 @@ import {
   normalizeDate,
   isValidPhone,
   normalizePhone,
-  validateRow,
   findDuplicates,
   processCSVPipeline
-} from './testHelpers.js';
+} from './lib/csvImport.js';
 
 const FIXTURE_DIR = join(process.cwd());
 
@@ -176,7 +175,7 @@ describe('CSV行级验证 - test-import.csv', () => {
     expect(result.validRows.length).toBe(4);
   });
 
-  it('应有3条错误行（坏数据1/3/4）', () => {
+  it('应有4条错误行（坏数据1/2/3/4）', () => {
     expect(result.errorRows.length).toBe(4);
   });
 });

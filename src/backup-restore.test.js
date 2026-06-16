@@ -3,11 +3,15 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import {
   validateRestoreData,
-  validateImportStoreData,
+  validateImportStoreData
+} from './lib/restoreValidation.js';
+import {
   isValidDate,
-  normalizeDate,
+  normalizeDate
+} from './lib/csvImport.js';
+import {
   SCHEMA_VERSION
-} from './testHelpers.js';
+} from './lib/config.js';
 
 const FIXTURE_DIR = join(process.cwd());
 
@@ -201,16 +205,19 @@ describe('备份边界场景', () => {
     const result = validateRestoreData(null);
     expect(result.valid).toBe(false);
     expect(result.errors.length).toBeGreaterThan(0);
+    expect(result.errors[0]).toContain('文件内容为空');
   });
 
   it('undefined输入应返回无效结果', () => {
     const result = validateRestoreData(undefined);
     expect(result.valid).toBe(false);
+    expect(result.errors[0]).toContain('文件内容为空');
   });
 
   it('字符串输入应返回无效结果', () => {
     const result = validateRestoreData('not an object');
     expect(result.valid).toBe(false);
+    expect(result.errors[0]).toContain('文件格式错误');
   });
 
   it('空数组输入应返回有效但警告无记录', () => {
@@ -222,11 +229,13 @@ describe('备份边界场景', () => {
   it('records为非数组的对象应返回无效', () => {
     const result = validateRestoreData({ records: 'not-array' });
     expect(result.valid).toBe(false);
+    expect(result.errors[0]).toContain('records字段应为数组');
   });
 
   it('无records字段且非数组的对象应返回无效', () => {
     const result = validateRestoreData({ foo: 'bar' });
     expect(result.valid).toBe(false);
+    expect(result.errors[0]).toContain('文件结构错误');
   });
 
   it('空records数组应有警告', () => {
@@ -265,6 +274,23 @@ describe('validateImportStoreData - 门店数据导入校验', () => {
     const result = validateImportStoreData(storeFormat);
     expect(result.valid).toBe(true);
     expect(result.data.records.length).toBe(3);
+  });
+
+  it('records字段应通过migrateRecord自动迁移', () => {
+    const rawRecord = {
+      pet: '迁移测试猫',
+      ownerPhone: '13800009999',
+      vaccine: '猫三联',
+      nextDate: '2027-01-01'
+    };
+    const result = validateImportStoreData({ records: [rawRecord] });
+    expect(result.valid).toBe(true);
+    const migrated = result.data.records[0];
+    expect(migrated.id).toBeTruthy();
+    expect(migrated.status).toBeTruthy();
+    expect(Array.isArray(migrated.timeline)).toBe(true);
+    expect(Array.isArray(migrated.notes)).toBe(true);
+    expect(migrated.schemaVersion).toBe(SCHEMA_VERSION);
   });
 });
 
