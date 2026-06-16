@@ -1,798 +1,62 @@
 import { useMemo, useState, useRef, useEffect } from 'react';
 import { Syringe, Plus, Search, Trash2, RotateCcw, CheckCircle2, AlertTriangle, ClipboardList, CalendarDays, PhoneCall, Clock, AlertCircle, CalendarCheck, MessageSquareText, X, User, Calendar, Upload, FileText, AlertOctagon, CheckCheck, Info, Users, PawPrint, ArrowLeft, ChevronRight, Settings, Save, Edit3, Zap, Filter, PlusCircle, MinusCircle, Building2, Copy, Download, MoreHorizontal, ShieldCheck } from 'lucide-react';
 import './App.css';
-import { appConfig as _appConfig, SCHEMA_VERSION, STORE_SCHEMA_VERSION, BACKUP_FORMAT_VERSION, defaultTemplates, defaultRules, formatLocalDate, today, uid } from './lib/config.js';
-import { parseCSV, detectFieldMapping, isValidDate, normalizeDate, isValidPhone, normalizePhone, validateRow, findDuplicates } from './lib/csvImport.js';
-import { validateRestoreData, validateImportStoreData, getExpectedFormatHint, migrateRecord } from './lib/restoreValidation.js';
-
-const appConfig = _appConfig;
-
-const RULES_STORAGE_KEY = appConfig.storage + '-rules';
-
-function loadRules() {
-  const raw = localStorage.getItem(RULES_STORAGE_KEY);
-  if (raw) {
-    try { return JSON.parse(raw); } catch { return [...defaultRules]; }
-  }
-  return [...defaultRules];
-}
-
-function persistRules(rules) {
-  localStorage.setItem(RULES_STORAGE_KEY, JSON.stringify(rules));
-}
-
-function getRuleForVaccine(vaccine, rules) {
-  return rules.find(r => r.vaccine === vaccine) || null;
-}
-
-function getAdvanceDays(vaccine, rules) {
-  const rule = getRuleForVaccine(vaccine, rules);
-  return rule ? rule.advanceDays : 7;
-}
-
-function getDefaultStatusForVaccine(vaccine, rules) {
-  const rule = getRuleForVaccine(vaccine, rules);
-  return rule ? rule.defaultStatus : appConfig.primaryStatus;
-}
-
-function getOverdueLevel(overdueDays, vaccine, rules) {
-  if (overdueDays <= 0) return null;
-  const rule = getRuleForVaccine(vaccine, rules);
-  if (!rule || !rule.overdueLevels || rule.overdueLevels.length === 0) {
-    if (overdueDays <= 7) return { label: '轻度逾期', level: 0 };
-    if (overdueDays <= 30) return { label: '中度逾期', level: 1 };
-    return { label: '重度逾期', level: 2 };
-  }
-  for (let i = 0; i < rule.overdueLevels.length; i++) {
-    const ol = rule.overdueLevels[i];
-    if (overdueDays >= ol.min && overdueDays <= ol.max) {
-      return { label: ol.label, level: i, id: ol.id };
-    }
-  }
-  return { label: rule.overdueLevels[rule.overdueLevels.length - 1].label, level: rule.overdueLevels.length - 1, id: rule.overdueLevels[rule.overdueLevels.length - 1].id };
-}
-
-function getAutoGroupForVaccine(vaccine, rules) {
-  const rule = getRuleForVaccine(vaccine, rules);
-  return rule ? rule.autoGroup : 'overdue';
-}
-
-const TEMPLATE_STORAGE_KEY = appConfig.storage + '-templates';
-
-function loadTemplates() {
-  const raw = localStorage.getItem(TEMPLATE_STORAGE_KEY);
-  if (raw) {
-    try { return JSON.parse(raw); } catch { return [...defaultTemplates]; }
-  }
-  return [...defaultTemplates];
-}
-
-function persistTemplates(templates) {
-  localStorage.setItem(TEMPLATE_STORAGE_KEY, JSON.stringify(templates));
-}
-
-function calcNextDate(lastDate, species, vaccine, templates) {
-  if (!lastDate) return '';
-  const tpl = templates.find(t => t.species === species && t.vaccine === vaccine);
-  if (!tpl) return '';
-  const [y, m, d] = lastDate.split('-').map(Number);
-  const date = new Date(y, (m || 1) - 1, d || 1);
-  if (isNaN(date.getTime())) return '';
-  date.setDate(date.getDate() + tpl.days);
-  return formatLocalDate(date);
-}
-
-function parseLocalDate(dateText) {
-  if (!dateText) return new Date(NaN);
-  const [y, m, d] = dateText.split('-').map(Number);
-  return new Date(y, (m || 1) - 1, d || 1, 0, 0, 0, 0);
-}
-
-function migrateRecordsIfNeeded(records) {
-  let hasChanges = false;
-  const migrated = records.map(record => {
-    const result = migrateRecord(record);
-    if (result.needsPersist) hasChanges = true;
-    return result.record;
-  });
-  return { records: migrated, hasChanges };
-}
-
-function withIds(items) {
-  return items.map((item) => ({
-    id: uid(),
-    ...item,
-    timeline: item.timeline || [{ status: item.status, at: today, by: '系统' }],
-    notes: item.notes || [],
-    schemaVersion: SCHEMA_VERSION
-  }));
-}
-
-const STORES_META_KEY = appConfig.storage + '-stores-meta';
-const STORE_DATA_KEY_PREFIX = appConfig.storage + '-store-';
-
-function getStoreMetaStorageKey() {
-  return STORES_META_KEY;
-}
-
-function getStoreDataKey(storeId) {
-  return STORE_DATA_KEY_PREFIX + storeId;
-}
-
-function loadStoresMeta() {
-  const raw = localStorage.getItem(STORES_META_KEY);
-  if (raw) {
-    try {
-      return JSON.parse(raw);
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
-
-function persistStoresMeta(meta) {
-  localStorage.setItem(STORES_META_KEY, JSON.stringify(meta));
-}
-
-function loadStoreData(storeId) {
-  const key = getStoreDataKey(storeId);
-  const raw = localStorage.getItem(key);
-  if (raw) {
-    try {
-      return JSON.parse(raw);
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
-
-function persistStoreData(storeId, data) {
-  const key = getStoreDataKey(storeId);
-  localStorage.setItem(key, JSON.stringify(data));
-}
-
-function deleteStoreData(storeId) {
-  const key = getStoreDataKey(storeId);
-  localStorage.removeItem(key);
-}
-
-function createDefaultStoreData() {
-  return {
-    records: withIds(appConfig.seed),
-    templates: [...defaultTemplates],
-    rules: defaultRules.map(r => ({ ...r, overdueLevels: (r.overdueLevels || []).map(ol => ({ ...ol })) })),
-    filters: { query: '', status: '全部' },
-    groupMode: 'auto',
-    ownerInfo: {},
-    schemaVersion: STORE_SCHEMA_VERSION
-  };
-}
-
-function migrateFromSingleStore() {
-  const hasOldRecords = localStorage.getItem(appConfig.storage) !== null;
-  const hasOldTemplates = localStorage.getItem(TEMPLATE_STORAGE_KEY) !== null;
-  const hasOldRules = localStorage.getItem(RULES_STORAGE_KEY) !== null;
-
-  if (!hasOldRecords && !hasOldTemplates && !hasOldRules) {
-    return null;
-  }
-
-  let records = [];
-  try {
-    const raw = localStorage.getItem(appConfig.storage);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      const { records: migrated, hasChanges } = migrateRecordsIfNeeded(parsed);
-      records = migrated;
-      if (hasChanges) {
-        localStorage.setItem(appConfig.storage, JSON.stringify(records));
-      }
-    }
-  } catch {
-    records = withIds(appConfig.seed);
-  }
-
-  let templates = [...defaultTemplates];
-  try {
-    const raw = localStorage.getItem(TEMPLATE_STORAGE_KEY);
-    if (raw) {
-      templates = JSON.parse(raw);
-    }
-  } catch {}
-
-  let rules = defaultRules.map(r => ({ ...r, overdueLevels: (r.overdueLevels || []).map(ol => ({ ...ol })) }));
-  try {
-    const raw = localStorage.getItem(RULES_STORAGE_KEY);
-    if (raw) {
-      rules = JSON.parse(raw);
-    }
-  } catch {}
-
-  const storeId = 'store-default';
-  const storeData = {
-    records,
-    templates,
-    rules,
-    filters: { query: '', status: '全部' },
-    groupMode: 'auto',
-    ownerInfo: {},
-    schemaVersion: STORE_SCHEMA_VERSION
-  };
-
-  const meta = {
-    version: 1,
-    currentStoreId: storeId,
-    stores: [
-      {
-        id: storeId,
-        name: '默认门店',
-        createdAt: new Date().toISOString(),
-        isDefault: true,
-        migrated: true
-      }
-    ]
-  };
-
-  persistStoreData(storeId, storeData);
-  persistStoresMeta(meta);
-
-  return { meta, storeData, storeId };
-}
-
-function initStores() {
-  let meta = loadStoresMeta();
-
-  if (meta && meta.stores && meta.stores.length > 0) {
-    const currentStoreId = meta.currentStoreId || meta.stores[0].id;
-    let storeData = loadStoreData(currentStoreId);
-    if (!storeData) {
-      storeData = createDefaultStoreData();
-      persistStoreData(currentStoreId, storeData);
-    }
-    if (!meta.currentStoreId) {
-      meta.currentStoreId = currentStoreId;
-      persistStoresMeta(meta);
-    }
-    return { meta, storeData, storeId: currentStoreId };
-  }
-
-  const migrated = migrateFromSingleStore();
-  if (migrated) {
-    return migrated;
-  }
-
-  const storeId = 'store-default';
-  const storeData = createDefaultStoreData();
-  meta = {
-    version: 1,
-    currentStoreId: storeId,
-    stores: [
-      {
-        id: storeId,
-        name: '默认门店',
-        createdAt: new Date().toISOString(),
-        isDefault: true
-      }
-    ]
-  };
-
-  persistStoreData(storeId, storeData);
-  persistStoresMeta(meta);
-
-  return { meta, storeData, storeId };
-}
-
-function createStore(name, templateStoreId) {
-  const meta = loadStoresMeta();
-  if (!meta) return null;
-
-  const storeId = 'store-' + uid();
-  let storeData;
-
-  if (templateStoreId) {
-    storeData = loadStoreData(templateStoreId);
-    if (storeData) {
-      storeData = {
-        ...storeData,
-        records: storeData.records.map(r => ({ ...r, id: uid(), timeline: [...(r.timeline || [])], notes: [...(r.notes || [])] })),
-        templates: (storeData.templates || []).map(t => ({ ...t })),
-        rules: (storeData.rules || []).map(r => ({ ...r, overdueLevels: (r.overdueLevels || []).map(ol => ({ ...ol })) })),
-        filters: { query: '', status: '全部' },
-        groupMode: storeData.groupMode || 'auto',
-        ownerInfo: storeData.ownerInfo || {}
-      };
-    } else {
-      storeData = createDefaultStoreData();
-    }
-  } else {
-    storeData = createDefaultStoreData();
-  }
-
-  persistStoreData(storeId, storeData);
-
-  const newStore = {
-    id: storeId,
-    name: name.trim() || '新门店',
-    createdAt: new Date().toISOString(),
-    isDefault: false
-  };
-
-  meta.stores.push(newStore);
-  meta.currentStoreId = storeId;
-  persistStoresMeta(meta);
-
-  return { store: newStore, storeData };
-}
-
-function renameStore(storeId, newName) {
-  const meta = loadStoresMeta();
-  if (!meta || !meta.stores) return null;
-
-  const storeIndex = meta.stores.findIndex(s => s.id === storeId);
-  if (storeIndex === -1) return null;
-
-  meta.stores[storeIndex].name = newName.trim() || '未命名门店';
-  persistStoresMeta(meta);
-
-  return meta.stores[storeIndex];
-}
-
-function deleteStore(storeId) {
-  const meta = loadStoresMeta();
-  if (!meta || !meta.stores || meta.stores.length <= 1) return false;
-
-  const storeIndex = meta.stores.findIndex(s => s.id === storeId);
-  if (storeIndex === -1) return false;
-
-  const store = meta.stores[storeIndex];
-  if (store.isDefault) return false;
-
-  meta.stores.splice(storeIndex, 1);
-  deleteStoreData(storeId);
-
-  if (meta.currentStoreId === storeId) {
-    meta.currentStoreId = meta.stores[0].id;
-  }
-
-  persistStoresMeta(meta);
-  return true;
-}
-
-function switchStore(storeId) {
-  const meta = loadStoresMeta();
-  if (!meta || !meta.stores) return null;
-
-  const store = meta.stores.find(s => s.id === storeId);
-  if (!store) return null;
-
-  meta.currentStoreId = storeId;
-  persistStoresMeta(meta);
-
-  const storeData = loadStoreData(storeId);
-  return { store, storeData };
-}
-
-function exportStoreData(storeId, storeName) {
-  const storeData = loadStoreData(storeId);
-  if (!storeData) return null;
-
-  const exportData = {
-    version: 1,
-    exportedAt: new Date().toISOString(),
-    appId: appConfig.id,
-    storeName: storeName,
-    storeId: storeId,
-    schemaVersion: STORE_SCHEMA_VERSION,
-    recordCount: storeData.records?.length || 0,
-    data: storeData
-  };
-
-  return exportData;
-}
-
-function importStoreData(storeId, importData) {
-  const { valid, data } = validateImportStoreData(importData);
-  if (!valid || !data) return false;
-
-  persistStoreData(storeId, data);
-  return true;
-}
-
-function safeParseStorageValue(key) {
-  const raw = localStorage.getItem(key);
-  if (raw === null) return { exists: false, value: null, error: null };
-  try {
-    return { exists: true, value: JSON.parse(raw), error: null };
-  } catch (error) {
-    return { exists: true, value: null, error };
-  }
-}
-
-function compareConfigList(a, b) {
-  return JSON.stringify(a || []) === JSON.stringify(b || []);
-}
-
-function detectDataHealthIssues() {
-  const issues = [];
-  const metaCheck = safeParseStorageValue(STORES_META_KEY);
-  const oldRecordCheck = safeParseStorageValue(appConfig.storage);
-
-  if (oldRecordCheck.exists && Array.isArray(oldRecordCheck.value) && oldRecordCheck.value.length > 0) {
-    issues.push({
-      id: 'legacy-single-store',
-      severity: 'warning',
-      title: '旧版单店数据残留',
-      risk: '旧版记录仍保留在单店存储键中，可能让导入恢复或旧逻辑读取到过期数据。',
-      action: '迁移到默认门店并清理旧版记录键',
-      fixable: true,
-      count: oldRecordCheck.value.length
-    });
-  } else if (oldRecordCheck.error) {
-    issues.push({
-      id: 'legacy-single-store-damaged',
-      severity: 'critical',
-      title: '旧版单店数据损坏',
-      risk: '旧版记录键不是有效JSON，无法确认其中是否还有未迁移数据。',
-      action: '导出安全备份后清理损坏的旧版记录键',
-      fixable: true,
-      count: 1
-    });
-  }
-
-  if (!metaCheck.exists || metaCheck.error || !metaCheck.value || !Array.isArray(metaCheck.value.stores) || metaCheck.value.stores.length === 0) {
-    issues.push({
-      id: 'stores-meta-missing',
-      severity: 'critical',
-      title: '多门店元数据缺失或损坏',
-      risk: '门店列表或当前门店指针不可用，门店切换与数据隔离可能失效。',
-      action: '重建默认门店元数据，并保留可读取的现有记录',
-      fixable: true,
-      count: 1
-    });
-    return issues;
-  }
-
-  const stores = metaCheck.value.stores;
-  const baseStore = stores[0];
-  const baseData = baseStore ? loadStoreData(baseStore.id) : null;
-
-  stores.forEach((store) => {
-    const key = getStoreDataKey(store.id);
-    const dataCheck = safeParseStorageValue(key);
-    if (!dataCheck.exists || dataCheck.error || !dataCheck.value || !Array.isArray(dataCheck.value.records)) {
-      issues.push({
-        id: `store-data-damaged:${store.id}`,
-        severity: 'critical',
-        title: `门店数据缺失或损坏：${store.name}`,
-        risk: '该门店记录无法读取，切换到此门店时会出现空数据或默认数据覆盖风险。',
-        action: '重建该门店的数据结构',
-        fixable: true,
-        storeId: store.id,
-        count: 1
-      });
-      return;
-    }
-
-    const data = dataCheck.value;
-    const missingTimeline = (data.records || []).filter((record) => !Array.isArray(record.timeline) || record.timeline.length === 0);
-    if (missingTimeline.length > 0) {
-      issues.push({
-        id: `records-missing-timeline:${store.id}`,
-        severity: 'warning',
-        title: `记录缺少timeline：${store.name}`,
-        risk: '状态流转历史不完整，恢复或审计时无法追踪原始状态来源。',
-        action: '为缺失记录补充当前状态的迁移时间线',
-        fixable: true,
-        storeId: store.id,
-        count: missingTimeline.length,
-        samples: missingTimeline.slice(0, 3).map((record) => record.pet || record.ownerPhone || record.id)
-      });
-    }
-
-    const missingNotes = (data.records || []).filter((record) => !Array.isArray(record.notes));
-    if (missingNotes.length > 0) {
-      issues.push({
-        id: `records-missing-notes:${store.id}`,
-        severity: 'warning',
-        title: `记录缺少notes：${store.name}`,
-        risk: '备注结构缺失会导致详情页备注区域和备份恢复数据结构不一致。',
-        action: '为缺失记录补充空备注数组',
-        fixable: true,
-        storeId: store.id,
-        count: missingNotes.length,
-        samples: missingNotes.slice(0, 3).map((record) => record.pet || record.ownerPhone || record.id)
-      });
-    }
-
-    if ((data.schemaVersion || 0) < STORE_SCHEMA_VERSION) {
-      issues.push({
-        id: `store-schema-old:${store.id}`,
-        severity: 'info',
-        title: `门店Schema版本过旧：${store.name}`,
-        risk: '旧Schema会让后续修复难以判断数据是否已经迁移。',
-        action: '更新门店Schema版本',
-        fixable: true,
-        storeId: store.id,
-        count: 1
-      });
-    }
-
-    if (baseData && store.id !== baseStore.id && !compareConfigList(data.templates, baseData.templates)) {
-      issues.push({
-        id: `templates-out-of-sync:${store.id}`,
-        severity: 'info',
-        title: `模板配置不同步：${store.name}`,
-        risk: '不同门店复种周期不一致时，同类记录可能计算出不同提醒日期。',
-        action: '同步为当前默认门店模板',
-        fixable: true,
-        storeId: store.id,
-        count: Math.max(data.templates?.length || 0, baseData.templates?.length || 0)
-      });
-    }
-
-    if (baseData && store.id !== baseStore.id && !compareConfigList(data.rules, baseData.rules)) {
-      issues.push({
-        id: `rules-out-of-sync:${store.id}`,
-        severity: 'info',
-        title: `规则配置不同步：${store.name}`,
-        risk: '提醒提前量、默认状态或逾期分级不一致会影响分组和联系优先级。',
-        action: '同步为当前默认门店规则',
-        fixable: true,
-        storeId: store.id,
-        count: Math.max(data.rules?.length || 0, baseData.rules?.length || 0)
-      });
-    }
-  });
-
-  return issues;
-}
-
-function severityLabel(severity) {
-  return {
-    critical: '高风险',
-    warning: '需关注',
-    info: '提示'
-  }[severity] || '提示';
-}
-
-function exportFullHealthBackup() {
-  const snapshot = {};
-  for (let index = 0; index < localStorage.length; index++) {
-    const key = localStorage.key(index);
-    if (key && key.startsWith(appConfig.storage)) {
-      snapshot[key] = localStorage.getItem(key);
-    }
-  }
-
-  const jsonStr = JSON.stringify({
-    version: BACKUP_FORMAT_VERSION,
-    type: 'health-snapshot',
-    exportedAt: new Date().toISOString(),
-    appId: appConfig.id,
-    storagePrefix: appConfig.storage,
-    snapshot
-  }, null, 2);
-  const blob = new Blob([jsonStr], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
-  link.download = `健康备份_完整快照_${stamp}.json`;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
-}
-
-function applyHealthFix(issue) {
-  const meta = loadStoresMeta();
-  const store = issue.storeId && meta?.stores?.find((item) => item.id === issue.storeId);
-
-  if (issue.id === 'legacy-single-store') {
-    const oldRecordCheck = safeParseStorageValue(appConfig.storage);
-    if (Array.isArray(oldRecordCheck.value) && oldRecordCheck.value.length > 0) {
-      const targetStoreId = meta?.currentStoreId || meta?.stores?.[0]?.id || initStores().storeId;
-      const targetData = loadStoreData(targetStoreId) || createDefaultStoreData();
-      const existingIds = new Set((targetData.records || []).map((record) => record.id));
-      const existingKeys = new Set((targetData.records || []).map((record) => `${normalizePhone(record.ownerPhone)}-${record.pet}-${record.vaccine}`));
-      const migratedRecords = oldRecordCheck.value
-        .map((record) => ({
-          ...record,
-          id: record.id || uid(),
-          ownerPhone: normalizePhone(record.ownerPhone || ''),
-          timeline: Array.isArray(record.timeline) && record.timeline.length > 0
-            ? record.timeline
-            : [{ status: record.status || appConfig.primaryStatus, at: today, by: '健康修复' }],
-          notes: Array.isArray(record.notes) ? record.notes : [],
-          status: record.status || appConfig.primaryStatus,
-          schemaVersion: record.schemaVersion || SCHEMA_VERSION
-        }))
-        .filter((record) => {
-          const key = `${record.ownerPhone}-${record.pet}-${record.vaccine}`;
-          if (existingIds.has(record.id) || existingKeys.has(key)) return false;
-          existingIds.add(record.id);
-          existingKeys.add(key);
-          return true;
-        });
-      persistStoreData(targetStoreId, {
-        ...targetData,
-        records: [...migratedRecords, ...(targetData.records || [])]
-      });
-    }
-    localStorage.removeItem(appConfig.storage);
-    return '已迁移并清理旧版单店存储键';
-  }
-
-  if (issue.id === 'legacy-single-store-damaged') {
-    localStorage.removeItem(appConfig.storage);
-    return '已清理损坏的旧版单店存储键';
-  }
-
-  if (issue.id === 'stores-meta-missing') {
-    const current = initStores();
-    persistStoresMeta(current.meta);
-    persistStoreData(current.storeId, current.storeData);
-    return '已重建默认门店元数据';
-  }
-
-  if (!store) return '未找到目标门店，已跳过';
-
-  const data = loadStoreData(store.id) || createDefaultStoreData();
-
-  if (issue.id.startsWith('store-data-damaged:')) {
-    persistStoreData(store.id, createDefaultStoreData());
-    return `已重建${store.name}的数据结构`;
-  }
-
-  if (issue.id.startsWith('records-missing-timeline:')) {
-    data.records = (data.records || []).map((record) => ({
-      ...record,
-      timeline: Array.isArray(record.timeline) && record.timeline.length > 0
-        ? record.timeline
-        : [{ status: record.status || appConfig.primaryStatus, at: today, by: '健康修复' }]
-    }));
-    persistStoreData(store.id, data);
-    return `已为${store.name}补齐timeline`;
-  }
-
-  if (issue.id.startsWith('records-missing-notes:')) {
-    data.records = (data.records || []).map((record) => ({
-      ...record,
-      notes: Array.isArray(record.notes) ? record.notes : []
-    }));
-    persistStoreData(store.id, data);
-    return `已为${store.name}补齐notes`;
-  }
-
-  if (issue.id.startsWith('store-schema-old:')) {
-    persistStoreData(store.id, { ...data, schemaVersion: STORE_SCHEMA_VERSION });
-    return `已更新${store.name}的Schema版本`;
-  }
-
-  const baseStore = meta?.stores?.[0];
-  const baseData = baseStore ? loadStoreData(baseStore.id) : null;
-  if (!baseData) return '缺少基准门店数据，已跳过';
-
-  if (issue.id.startsWith('templates-out-of-sync:')) {
-    persistStoreData(store.id, { ...data, templates: (baseData.templates || []).map((item) => ({ ...item })) });
-    return `已同步${store.name}的模板`;
-  }
-
-  if (issue.id.startsWith('rules-out-of-sync:')) {
-    persistStoreData(store.id, {
-      ...data,
-      rules: (baseData.rules || []).map((rule) => ({
-        ...rule,
-        overdueLevels: (rule.overdueLevels || []).map((level) => ({ ...level }))
-      }))
-    });
-    return `已同步${store.name}的规则`;
-  }
-
-  return '未识别修复项，已跳过';
-}
-
-function loadRecords() {
-  const raw = localStorage.getItem(appConfig.storage);
-  if (raw) {
-    try {
-      const parsed = JSON.parse(raw);
-      const { records, hasChanges } = migrateRecordsIfNeeded(parsed);
-      if (hasChanges) {
-        localStorage.setItem(appConfig.storage, JSON.stringify(records));
-      }
-      return records;
-    } catch {
-      return withIds(appConfig.seed);
-    }
-  }
-  return withIds(appConfig.seed);
-}
-
-function avg(numbers) {
-  const valid = numbers.filter((value) => Number.isFinite(value));
-  if (!valid.length) return 0;
-  return valid.reduce((sum, value) => sum + value, 0) / valid.length;
-}
-
-function money(value) {
-  return new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'CNY', maximumFractionDigits: 0 }).format(value || 0);
-}
-
-function inNextDays(dateText, days) {
-  if (!dateText) return false;
-  const date = parseLocalDate(dateText);
-  const now = parseLocalDate(today);
-  const diff = (date.getTime() - now.getTime()) / 86400000;
-  return diff >= 0 && diff <= days;
-}
-
-function isOverdue(dateText) {
-  if (!dateText) return false;
-  const date = parseLocalDate(dateText);
-  const now = parseLocalDate(today);
-  return date.getTime() < now.getTime();
-}
-
-function isToday(dateText) {
-  if (!dateText) return false;
-  return dateText === today;
-}
-
-function isWithin7DaysExcludingToday(dateText) {
-  if (!dateText) return false;
-  const date = parseLocalDate(dateText);
-  const now = parseLocalDate(today);
-  const diff = (date.getTime() - now.getTime()) / 86400000;
-  return diff > 0 && diff <= 7;
-}
-
-function isWithinNextDays(dateText, days) {
-  if (!dateText) return false;
-  const date = parseLocalDate(dateText);
-  const now = parseLocalDate(today);
-  const diff = (date.getTime() - now.getTime()) / 86400000;
-  return diff > 0 && diff <= days;
-}
-
-function isWithinAdvanceDays(item, rules) {
-  if (!item || !item.nextDate) return false;
-  const adv = getAdvanceDays(item.vaccine, rules);
-  return isWithinNextDays(item.nextDate, adv);
-}
-
-function daysDiff(dateText) {
-  if (!dateText) return 0;
-  const date = parseLocalDate(dateText);
-  const now = parseLocalDate(today);
-  return Math.round((date.getTime() - now.getTime()) / 86400000);
-}
-
-function latestTemp(item) {
-  const temps = item.temps || [Number(item.temperature)];
-  return temps[temps.length - 1];
-}
-
-function hasHotTemp(item) {
-  const temps = item.temps || [Number(item.temperature)];
-  return temps.some((value) => Number(value) > 2);
-}
-
-function priorityRank(value) {
-  return { 危急: 0, 加急: 1, 常规: 2, 高: 0, 中: 1, 低: 2 }[value] ?? 9;
-}
-
-function hasOverlap(target, records) {
-  if (!target.bed || !target.date || !target.start || !target.end) return false;
-  return records.some((item) => item.id !== target.id && item.bed === target.bed && item.date === target.date && target.start < item.end && target.end > item.start);
-}
-
-function statusClass(status) {
-  const index = appConfig.statuses.indexOf(status);
-  return ['status-a', 'status-b', 'status-c', 'status-d'][index] || 'status-a';
-}
+import { appConfig, defaultTemplates, defaultRules, formatLocalDate, today, uid } from './lib/config.js';
+import { parseCSV, detectFieldMapping, validateRow, findDuplicates } from './lib/csvImport.js';
+import { validateRestoreData, validateImportStoreData, getExpectedFormatHint } from './lib/restoreValidation.js';
+import { persistRules, getAdvanceDays, getDefaultStatusForVaccine, getOverdueLevel, getAutoGroupForVaccine, upsertRule, removeRuleById, createDefaultRuleForm } from './lib/rules.js';
+import { persistTemplates, calcNextDate, parseLocalDate, upsertTemplate, removeTemplateById } from './lib/templates.js';
+import {
+  loadStoresMeta,
+  loadStoreData,
+  persistStoreData,
+  initStores,
+  createStore,
+  renameStore,
+  deleteStore,
+  switchStore,
+  exportStoreData
+} from './lib/storeStorage.js';
+import {
+  detectDataHealthIssues,
+  severityLabel,
+  exportFullHealthBackup,
+  applyHealthFix
+} from './lib/healthCheck.js';
+import {
+  inNextDays,
+  isOverdue,
+  isToday,
+  isWithinNextDays,
+  isWithinAdvanceDays,
+  daysDiff,
+  priorityRank,
+  hasOverlap,
+  statusClass
+} from './lib/recordUtils.js';
+import {
+  buildNewRecord,
+  buildNote,
+  addNoteToRecords,
+  removeNoteFromRecords,
+  updateStatusInRecords,
+  removeRecordFromList,
+  duplicateRecordItem,
+  addTemperatureToRecords,
+  repairRecordDates,
+  buildCSVImportRecord
+} from './lib/recordActions.js';
+import {
+  buildExportData,
+  calculateRestoreChanges,
+  mergeRestoredData,
+  buildRestoreConfigSummary
+} from './lib/backupRestore.js';
+import {
+  extractStoreState,
+  persistCurrentStoreState,
+  persistStoreField
+} from './lib/storeHelpers.js';
 
 function App() {
   const initialStoreState = useMemo(() => initStores(), []);
@@ -826,17 +90,7 @@ function App() {
   const [templateForm, setTemplateForm] = useState({ species: '', vaccine: '', days: '' });
   const [rules, setRules] = useState(initialStoreState.storeData.rules);
   const [editingRule, setEditingRule] = useState(null);
-  const [ruleForm, setRuleForm] = useState({
-    vaccine: '',
-    advanceDays: 7,
-    overdueLevels: [
-      { id: uid(), label: '轻度逾期', min: 1, max: 7 },
-      { id: uid(), label: '中度逾期', min: 8, max: 30 },
-      { id: uid(), label: '重度逾期', min: 31, max: 9999 }
-    ],
-    defaultStatus: '待联系',
-    autoGroup: 'overdue'
-  });
+  const [ruleForm, setRuleForm] = useState(createDefaultRuleForm());
   const [groupMode, setGroupMode] = useState(initialStoreState.storeData.groupMode);
   const [nextDateManual, setNextDateManual] = useState(false);
   const [calendarDate, setCalendarDate] = useState(new Date());
@@ -860,49 +114,33 @@ function App() {
   }, [stores, currentStoreId]);
 
   function saveCurrentStoreData(updates = {}) {
-    const currentData = loadStoreData(currentStoreId) || createDefaultStoreData();
-    const newData = {
-      ...currentData,
-      records,
-      templates,
-      rules,
-      filters,
-      groupMode,
-      ownerInfo,
-      ...updates
-    };
-    persistStoreData(currentStoreId, newData);
+    persistCurrentStoreState(currentStoreId, { records, templates, rules, filters, groupMode, ownerInfo }, updates);
   }
 
   function persist(next) {
     setRecords(next);
-    const currentData = loadStoreData(currentStoreId) || createDefaultStoreData();
-    persistStoreData(currentStoreId, { ...currentData, records: next });
+    persistStoreField(currentStoreId, 'records', next);
   }
 
   function saveTemplates(next) {
     setTemplates(next);
     persistTemplates(next);
-    const currentData = loadStoreData(currentStoreId) || createDefaultStoreData();
-    persistStoreData(currentStoreId, { ...currentData, templates: next });
+    persistStoreField(currentStoreId, 'templates', next);
   }
 
   function saveFilters(next) {
     setFilters(next);
-    const currentData = loadStoreData(currentStoreId) || createDefaultStoreData();
-    persistStoreData(currentStoreId, { ...currentData, filters: next });
+    persistStoreField(currentStoreId, 'filters', next);
   }
 
   function saveGroupMode(next) {
     setGroupMode(next);
-    const currentData = loadStoreData(currentStoreId) || createDefaultStoreData();
-    persistStoreData(currentStoreId, { ...currentData, groupMode: next });
+    persistStoreField(currentStoreId, 'groupMode', next);
   }
 
   function saveOwnerInfo(next) {
     setOwnerInfo(next);
-    const currentData = loadStoreData(currentStoreId) || createDefaultStoreData();
-    persistStoreData(currentStoreId, { ...currentData, ownerInfo: next });
+    persistStoreField(currentStoreId, 'ownerInfo', next);
   }
 
   function handleUpdateOwnerInfo(phone, info) {
@@ -916,13 +154,14 @@ function App() {
     const nextStoreId = meta?.currentStoreId || currentStoreId;
     const data = loadStoreData(nextStoreId);
     if (data) {
+      const state = extractStoreState(data);
       setCurrentStoreId(nextStoreId);
-      setRecords(data.records || []);
-      setTemplates(data.templates || [...defaultTemplates]);
-      setRules(data.rules || defaultRules.map(r => ({ ...r })));
-      setFilters(data.filters || { query: '', status: '全部' });
-      setGroupMode(data.groupMode || 'auto');
-      setOwnerInfo(data.ownerInfo || {});
+      setRecords(state.records);
+      setTemplates(state.templates);
+      setRules(state.rules);
+      setFilters(state.filters);
+      setGroupMode(state.groupMode);
+      setOwnerInfo(state.ownerInfo);
     }
   }
 
@@ -961,13 +200,14 @@ function App() {
 
     const result = switchStore(storeId);
     if (result && result.storeData) {
+      const state = extractStoreState(result.storeData);
       setCurrentStoreId(storeId);
-      setRecords(result.storeData.records || []);
-      setTemplates(result.storeData.templates || [...defaultTemplates]);
-      setRules(result.storeData.rules || defaultRules.map(r => ({ ...r })));
-      setFilters(result.storeData.filters || { query: '', status: '全部' });
-      setGroupMode(result.storeData.groupMode || 'auto');
-      setOwnerInfo(result.storeData.ownerInfo || {});
+      setRecords(state.records);
+      setTemplates(state.templates);
+      setRules(state.rules);
+      setFilters(state.filters);
+      setGroupMode(state.groupMode);
+      setOwnerInfo(state.ownerInfo);
       setSelected(null);
       setSelectedOwner(null);
       setSelectedCalendarDay(null);
@@ -985,14 +225,15 @@ function App() {
     const result = createStore(newStoreName, newStoreTemplateId || null);
     if (result) {
       const meta = loadStoresMeta();
+      const state = extractStoreState(result.storeData);
       setStores(meta.stores);
       setCurrentStoreId(result.store.id);
-      setRecords(result.storeData.records || []);
-      setTemplates(result.storeData.templates || [...defaultTemplates]);
-      setRules(result.storeData.rules || defaultRules.map(r => ({ ...r })));
-      setFilters(result.storeData.filters || { query: '', status: '全部' });
-      setGroupMode(result.storeData.groupMode || 'auto');
-      setOwnerInfo(result.storeData.ownerInfo || {});
+      setRecords(state.records);
+      setTemplates(state.templates);
+      setRules(state.rules);
+      setFilters(state.filters);
+      setGroupMode(state.groupMode);
+      setOwnerInfo(state.ownerInfo);
       setSelected(null);
       setSelectedOwner(null);
       setNewStoreName('');
@@ -1037,13 +278,14 @@ function App() {
         const newCurrentId = meta.currentStoreId;
         const newStoreData = loadStoreData(newCurrentId);
         if (newStoreData) {
+          const state = extractStoreState(newStoreData);
           setCurrentStoreId(newCurrentId);
-          setRecords(newStoreData.records || []);
-          setTemplates(newStoreData.templates || [...defaultTemplates]);
-          setRules(newStoreData.rules || defaultRules.map(r => ({ ...r })));
-          setFilters(newStoreData.filters || { query: '', status: '全部' });
-          setGroupMode(newStoreData.groupMode || 'auto');
-          setOwnerInfo(newStoreData.ownerInfo || {});
+          setRecords(state.records);
+          setTemplates(state.templates);
+          setRules(state.rules);
+          setFilters(state.filters);
+          setGroupMode(state.groupMode);
+          setOwnerInfo(state.ownerInfo);
           setSelected(null);
           setSelectedOwner(null);
         }
@@ -1114,12 +356,13 @@ function App() {
     persistStoreData(storeImportTargetId, data);
 
     if (storeImportTargetId === currentStoreId) {
-      setRecords(data.records || []);
-      setTemplates(data.templates || [...defaultTemplates]);
-      setRules(data.rules || defaultRules.map(r => ({ ...r })));
-      setFilters(data.filters || { query: '', status: '全部' });
-      setGroupMode(data.groupMode || 'auto');
-      setOwnerInfo(data.ownerInfo || {});
+      const state = extractStoreState(data);
+      setRecords(state.records);
+      setTemplates(state.templates);
+      setRules(state.rules);
+      setFilters(state.filters);
+      setGroupMode(state.groupMode);
+      setOwnerInfo(state.ownerInfo);
       setSelected(null);
       setSelectedOwner(null);
     }
@@ -1146,28 +389,21 @@ function App() {
   function saveRules(next) {
     setRules(next);
     persistRules(next);
-    const currentData = loadStoreData(currentStoreId) || createDefaultStoreData();
-    persistStoreData(currentStoreId, { ...currentData, rules: next });
+    persistStoreField(currentStoreId, 'rules', next);
   }
 
   function addTemplate(e) {
     e.preventDefault();
     const { species, vaccine, days } = templateForm;
     if (!species || !vaccine || !days || Number(days) <= 0) return;
-    const existing = templates.find(t => t.species === species && t.vaccine === vaccine);
-    if (existing) {
-      const next = templates.map(t => t.id === existing.id ? { ...t, days: Number(days) } : t);
-      saveTemplates(next);
-    } else {
-      const next = [...templates, { id: uid(), species, vaccine, days: Number(days) }];
-      saveTemplates(next);
-    }
+    const next = upsertTemplate(templates, templateForm);
+    saveTemplates(next);
     setTemplateForm({ species: '', vaccine: '', days: '' });
     setEditingTemplate(null);
   }
 
   function removeTemplate(id) {
-    saveTemplates(templates.filter(t => t.id !== id));
+    saveTemplates(removeTemplateById(templates, id));
   }
 
   function restoreDefaultTemplates() {
@@ -1189,46 +425,20 @@ function App() {
   function addRule(e) {
     e.preventDefault();
     if (!ruleForm.vaccine || !ruleForm.advanceDays || Number(ruleForm.advanceDays) <= 0) return;
-    const existing = rules.find(r => r.vaccine === ruleForm.vaccine);
-    if (existing) {
-      const next = rules.map(r => r.id === existing.id ? { ...r, ...ruleForm, advanceDays: Number(ruleForm.advanceDays) } : r);
-      saveRules(next);
-    } else {
-      const next = [...rules, { id: uid(), ...ruleForm, advanceDays: Number(ruleForm.advanceDays) }];
-      saveRules(next);
-    }
-    setRuleForm({
-      vaccine: '',
-      advanceDays: 7,
-      overdueLevels: [
-        { id: uid(), label: '轻度逾期', min: 1, max: 7 },
-        { id: uid(), label: '中度逾期', min: 8, max: 30 },
-        { id: uid(), label: '重度逾期', min: 31, max: 9999 }
-      ],
-      defaultStatus: '待联系',
-      autoGroup: 'overdue'
-    });
+    const next = upsertRule(rules, ruleForm);
+    saveRules(next);
+    setRuleForm(createDefaultRuleForm());
     setEditingRule(null);
   }
 
   function removeRule(id) {
-    saveRules(rules.filter(r => r.id !== id));
+    saveRules(removeRuleById(rules, id));
   }
 
   function restoreDefaultRules() {
     saveRules(defaultRules.map(r => ({ ...r })));
     setEditingRule(null);
-    setRuleForm({
-      vaccine: '',
-      advanceDays: 7,
-      overdueLevels: [
-        { id: uid(), label: '轻度逾期', min: 1, max: 7 },
-        { id: uid(), label: '中度逾期', min: 8, max: 30 },
-        { id: uid(), label: '重度逾期', min: 31, max: 9999 }
-      ],
-      defaultStatus: '待联系',
-      autoGroup: 'overdue'
-    });
+    setRuleForm(createDefaultRuleForm());
   }
 
   function startEditRule(rule) {
@@ -1244,17 +454,7 @@ function App() {
 
   function cancelEditRule() {
     setEditingRule(null);
-    setRuleForm({
-      vaccine: '',
-      advanceDays: 7,
-      overdueLevels: [
-        { id: uid(), label: '轻度逾期', min: 1, max: 7 },
-        { id: uid(), label: '中度逾期', min: 8, max: 30 },
-        { id: uid(), label: '重度逾期', min: 31, max: 9999 }
-      ],
-      defaultStatus: '待联系',
-      autoGroup: 'overdue'
-    });
+    setRuleForm(createDefaultRuleForm());
   }
 
   function addOverdueLevelToForm() {
@@ -1282,13 +482,7 @@ function App() {
   }
 
   function repairRecords() {
-    const next = records.map(item => {
-      if (item.nextDate && item.lastDate) return item;
-      if (!item.lastDate) return item;
-      const autoNext = calcNextDate(item.lastDate, item.species, item.vaccine, templates);
-      if (!autoNext) return item;
-      return { ...item, nextDate: autoNext };
-    });
+    const next = repairRecordDates(records, templates);
     persist(next);
     const count = next.filter((r, i) => r.nextDate !== records[i].nextDate).length;
     alert(`已修复 ${count} 条记录的下次提醒日期`);
@@ -1298,34 +492,7 @@ function App() {
     event.preventDefault();
     const formData = new FormData(event.currentTarget);
     const submittedValues = Object.fromEntries(formData.entries());
-    const submittedRecord = { ...form, ...submittedValues };
-    const autoNext = calcNextDate(submittedRecord.lastDate, submittedRecord.species, submittedRecord.vaccine, templates);
-    const finalNextDate = submittedRecord.nextDate || autoNext;
-    const ruleDefaultStatus = getDefaultStatusForVaccine(submittedRecord.vaccine, rules);
-    const finalStatus = submittedRecord.status || ruleDefaultStatus;
-    const nextRecord = {
-      id: uid(),
-      ...submittedRecord,
-      nextDate: finalNextDate,
-      status: finalStatus,
-      createdAt: new Date().toISOString(),
-      timeline: [{ status: finalStatus, at: today, by: '录入' }],
-      notes: [],
-      schemaVersion: SCHEMA_VERSION
-    };
-
-    if (appConfig.conflict === 'date-slot' && records.some((item) => item.date === nextRecord.date && item.slot === nextRecord.slot)) {
-      nextRecord.conflict = true;
-    }
-    if (appConfig.conflict === 'bed-time' && hasOverlap(nextRecord, records)) {
-      nextRecord.conflict = true;
-    }
-    if (appConfig.chart) {
-      const temp = Number(nextRecord.temperature || 0);
-      nextRecord.temps = [temp];
-      if (temp > 2) nextRecord.status = '异常';
-    }
-
+    const nextRecord = buildNewRecord({ form, submittedValues, templates, rules, records, appConfig });
     persist([nextRecord, ...records]);
     setForm(appConfig.defaultValues);
     setNextDateManual(false);
@@ -1334,16 +501,8 @@ function App() {
 
   function addNote(recordId) {
     if (!newNoteContent.trim()) return;
-    const note = {
-      id: uid(),
-      content: newNoteContent.trim(),
-      createdAt: new Date().toISOString(),
-      createdBy: newNoteOperator.trim() || '未署名'
-    };
-    const next = records.map((item) => item.id === recordId ? {
-      ...item,
-      notes: [...(item.notes || []), note]
-    } : item);
+    const note = buildNote(newNoteContent, newNoteOperator);
+    const next = addNoteToRecords(records, recordId, note);
     persist(next);
     const updated = next.find((item) => item.id === recordId);
     if (selected?.id === recordId) setSelected(updated);
@@ -1352,34 +511,26 @@ function App() {
   }
 
   function removeNote(recordId, noteId) {
-    const next = records.map((item) => item.id === recordId ? {
-      ...item,
-      notes: (item.notes || []).filter((n) => n.id !== noteId)
-    } : item);
+    const next = removeNoteFromRecords(records, recordId, noteId);
     persist(next);
     const updated = next.find((item) => item.id === recordId);
     if (selected?.id === recordId) setSelected(updated);
   }
 
   function updateStatus(id, status) {
-    const next = records.map((item) => item.id === id ? {
-      ...item,
-      status,
-      timeline: [...(item.timeline || []), { status, at: today, by: '操作员' }]
-    } : item);
+    const next = updateStatusInRecords(records, id, status);
     persist(next);
     if (selected?.id === id) setSelected(next.find((item) => item.id === id));
   }
 
   function removeRecord(id) {
-    const next = records.filter((item) => item.id !== id);
+    const next = removeRecordFromList(records, id);
     persist(next);
     if (selected?.id === id) setSelected(null);
   }
 
   function duplicateRecord(item) {
-    const dupStatus = getDefaultStatusForVaccine(item.vaccine, rules);
-    const copied = { ...item, id: uid(), status: dupStatus, timeline: [{ status: dupStatus, at: today, by: '复制' }], notes: [], schemaVersion: SCHEMA_VERSION };
+    const copied = duplicateRecordItem(item, rules);
     persist([copied, ...records]);
     setSelected(copied);
   }
@@ -1387,12 +538,7 @@ function App() {
   function addTemperature(item) {
     const value = Number(prompt('录入新的温度读数'));
     if (!Number.isFinite(value)) return;
-    const next = records.map((record) => record.id === item.id ? {
-      ...record,
-      temps: [...(record.temps || []), value],
-      temperature: String(value),
-      status: value > 2 ? '异常' : record.status
-    } : record);
+    const next = addTemperatureToRecords(records, item.id, value);
     persist(next);
     setSelected(next.find((record) => record.id === item.id));
   }
@@ -1468,18 +614,7 @@ function App() {
 
   function confirmImport() {
     if (!importPreview) return;
-    const newRecords = importPreview.validRows.map(row => {
-      const importStatus = getDefaultStatusForVaccine(row.data.vaccine, rules);
-      return {
-        id: uid(),
-        ...row.data,
-        status: importStatus,
-        createdAt: new Date().toISOString(),
-        timeline: [{ status: importStatus, at: today, by: '批量导入' }],
-        notes: [],
-        schemaVersion: SCHEMA_VERSION
-      };
-    });
+    const newRecords = importPreview.validRows.map(row => buildCSVImportRecord(row, rules));
     persist([...newRecords, ...records]);
     setShowImportModal(false);
     setImportPreview(null);
@@ -1500,26 +635,12 @@ function App() {
   }
 
   function exportToJSON() {
-    const exportData = {
-      version: BACKUP_FORMAT_VERSION,
-      exportedAt: new Date().toISOString(),
-      appId: appConfig.id,
-      storageKey: appConfig.storage,
+    const exportData = buildExportData({
+      records, templates, rules, filters, groupMode, ownerInfo,
       storeName: currentStore?.name || '默认门店',
       storeId: currentStoreId,
-      recordCount: records.length,
-      templateCount: templates.length,
-      ruleCount: rules.length,
-      records: records,
-      templates: templates.map((item) => ({ ...item })),
-      rules: rules.map((rule) => ({
-        ...rule,
-        overdueLevels: (rule.overdueLevels || []).map((level) => ({ ...level }))
-      })),
-      filters,
-      groupMode,
-      ownerInfo
-    };
+      appConfig
+    });
     const jsonStr = JSON.stringify(exportData, null, 2);
     const blob = new Blob([jsonStr], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -1531,63 +652,6 @@ function App() {
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
-  }
-
-  function calculateRestoreChanges(validRecords) {
-    const existingIds = new Set(records.map(r => r.id));
-    const existingKeyMap = new Map();
-    records.forEach(r => {
-      const key = `${normalizePhone(r.ownerPhone)}-${r.pet}-${r.vaccine}`;
-      existingKeyMap.set(key, r);
-    });
-
-    let addCount = 0;
-    let overwriteCount = 0;
-    let skipCount = 0;
-    const addRecords = [];
-    const overwriteRecords = [];
-    const skipRecords = [];
-
-    validRecords.forEach(record => {
-      const normalizedRecord = {
-        ...record,
-        ownerPhone: normalizePhone(record.ownerPhone),
-        lastDate: record.lastDate && isValidDate(record.lastDate) ? normalizeDate(record.lastDate) : '',
-        nextDate: normalizeDate(record.nextDate)
-      };
-
-      if (existingIds.has(record.id)) {
-        overwriteCount++;
-        overwriteRecords.push({
-          newRecord: normalizedRecord,
-          existingRecord: records.find(r => r.id === record.id)
-        });
-      } else {
-        const key = `${normalizedRecord.ownerPhone}-${normalizedRecord.pet}-${normalizedRecord.vaccine}`;
-        const existingByKey = existingKeyMap.get(key);
-        if (existingByKey) {
-          skipCount++;
-          skipRecords.push({
-            newRecord: normalizedRecord,
-            existingRecord: existingByKey,
-            reason: '已存在相同宠物+疫苗的记录'
-          });
-        } else {
-          addCount++;
-          addRecords.push(normalizedRecord);
-        }
-      }
-    });
-
-    return {
-      addCount,
-      overwriteCount,
-      skipCount,
-      addRecords,
-      overwriteRecords,
-      skipRecords,
-      totalValid: validRecords.length
-    };
   }
 
   function processRestoreFile(file) {
@@ -1626,7 +690,7 @@ function App() {
           return;
         }
 
-        const changes = calculateRestoreChanges(validation.validRecords);
+        const changes = calculateRestoreChanges(validation.validRecords, records);
 
         setRestoreFile(file);
         setRestorePreview({
@@ -1678,24 +742,9 @@ function App() {
     if (!restorePreview) return;
 
     const { changes, validation } = restorePreview;
-    const mergedRecords = [...records];
-
-    changes.overwriteRecords.forEach(({ newRecord }) => {
-      const idx = mergedRecords.findIndex(r => r.id === newRecord.id);
-      if (idx !== -1) {
-        mergedRecords[idx] = newRecord;
-      }
+    const { mergedRecords, nextTemplates, nextRules, nextFilters, nextGroupMode, nextOwnerInfo } = mergeRestoredData({
+      records, changes, validation, templates, rules, filters, groupMode, ownerInfo
     });
-
-    changes.addRecords.forEach(newRecord => {
-      mergedRecords.unshift(newRecord);
-    });
-
-    const nextTemplates = Array.isArray(validation.templates) ? validation.templates : templates;
-    const nextRules = Array.isArray(validation.rules) ? validation.rules : rules;
-    const nextFilters = validation.filters ? { query: '', status: '全部', ...validation.filters } : filters;
-    const nextGroupMode = validation.groupMode || groupMode;
-    const nextOwnerInfo = validation.ownerInfo ? { ...validation.ownerInfo } : ownerInfo;
 
     setRecords(mergedRecords);
     setTemplates(nextTemplates);
@@ -1704,9 +753,7 @@ function App() {
     setGroupMode(nextGroupMode);
     setOwnerInfo(nextOwnerInfo);
 
-    const currentData = loadStoreData(currentStoreId) || createDefaultStoreData();
-    persistStoreData(currentStoreId, {
-      ...currentData,
+    persistCurrentStoreState(currentStoreId, {
       records: mergedRecords,
       templates: nextTemplates,
       rules: nextRules,
@@ -1718,13 +765,7 @@ function App() {
     persistTemplates(nextTemplates);
     persistRules(nextRules);
 
-    const configSummary = [
-      Array.isArray(validation.templates) ? `模板 ${validation.templates.length} 个` : null,
-      Array.isArray(validation.rules) ? `规则 ${validation.rules.length} 条` : null,
-      validation.filters ? '筛选配置' : null,
-      validation.groupMode ? '分组模式' : null,
-      validation.ownerInfo ? '主人备注' : null
-    ].filter(Boolean);
+    const configSummary = buildRestoreConfigSummary(validation);
 
     cancelRestore();
     alert(`恢复完成：\n新增 ${changes.addCount} 条\n覆盖 ${changes.overwriteCount} 条\n跳过 ${changes.skipCount} 条${configSummary.length ? `\n恢复模块：${configSummary.join('、')}` : ''}`);
